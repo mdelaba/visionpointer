@@ -2,6 +2,64 @@
 
 ---
 
+## Getting Started
+
+VisionPointer lets you point at a web page with your hand in front of a webcam, pinch your thumb and index finger to select an element, and hand that element to an AI agent through an MCP server.
+
+### Requirements
+* Linux with a webcam (developed on Arch + Hyprland; the browser runs under Wayland/XWayland)
+* [uv](https://docs.astral.sh/uv/) and Python 3.11 (uv installs it if needed)
+* Optional: Claude Code (or any MCP-capable agent) to consume the selection
+
+### 1. Install
+```bash
+git clone https://github.com/mdelaba/visionpointer.git
+cd visionpointer
+uv venv -p 3.11 .venv
+uv pip install -p .venv/bin/python -r requirements.txt
+PLAYWRIGHT_BROWSERS_PATH=$PWD/.browsers .venv/bin/python -m playwright install chromium
+mkdir -p models
+curl -L -o models/hand_landmarker.task \
+  https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/latest/hand_landmarker.task
+```
+`mediapipe` is pinned to 0.10.21 on purpose: 1.x crashed when creating the hand landmarker in testing.
+
+### 2. Check hand tracking and pinch detection
+```bash
+.venv/bin/python src/finger_circle.py
+```
+A blue circle follows your index fingertip in the webcam preview and turns green while you pinch. The top line shows the thumb-to-index ratio. Tune with `--pinch-close` (default 0.20) and `--pinch-open` (default 0.25). Press `q` or Esc to quit.
+
+### 3. Calibrate
+```bash
+.venv/bin/python src/calibrate_pointer.py --recalibrate
+```
+Point at each red crosshair and press SPACE (keep your finger visible and steady while it samples). This saves `calibration.json`, which is only valid for the same screen size and camera resolution, so recalibrate if either changes. Afterwards the script shows the circle on a fullscreen canvas so you can check the accuracy. Press `c` to recalibrate and `q` to quit.
+
+### 4. Point at web elements
+```bash
+.venv/bin/python src/web_pointer.py              # free pointing on the test page
+.venv/bin/python src/web_pointer.py --hit-test   # scored test, results printed as VP_HIT lines
+.venv/bin/python src/web_pointer.py --url https://example.com
+```
+Hold your hand in a hook posture (index finger curled near the thumb) and move your hand to move the circle. The nearest clickable element within 50 px gets a blue outline. Pinch to select it: it gets a sticky green highlight and is written to `~/.cache/visionpointer/selection.json`. Pinch empty space to clear. Press Esc in the browser to quit. On Hyprland the script asks for fullscreen itself, because pointing only maps correctly when the page fills the screen.
+
+Useful options: `--radius` (snap radius, px), `--dwell-ms` (also select after holding; 0 = off), `--smooth` / `--smooth-beta` (steadiness vs lag), `--confidence`, `--max-jump`, `--timeout` (default 300 s), `--debug-log file.csv` (per-frame positions and pinch ratio for tuning).
+
+### 5. Connect an agent (MCP)
+```bash
+claude mcp add visionpointer -- "$PWD/.venv/bin/python" "$PWD/src/mcp_server.py"
+```
+While `web_pointer.py` is running, select an element by pinching and ask the agent about "this". It calls `get_selected_element` (and `get_selection_history`) to see the selector, text, attributes, HTML snippet, bounding box, page URL/title, and how long ago it was selected. For other agents, register `src/mcp_server.py` as a stdio MCP server, or read the JSON state files directly. Set `VP_STATE_DIR` to change where they are stored.
+
+### Troubleshooting
+* **Circle only reaches part of the screen:** the browser isn't fullscreen. Make the window fullscreen.
+* **"No calibration for this screen size and camera resolution":** run step 3 again.
+* **Jittery pointer or jumps:** check lighting (the camera drops its frame rate in dim light), raise `--confidence`, or lower `--smooth`.
+* **Camera not found:** try `--camera 1` (or check `ls /dev/video*`).
+
+---
+
 ## 1. Executive Summary & Vision
 
 ### Core Concept
