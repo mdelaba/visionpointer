@@ -1,4 +1,4 @@
-"""Webcam preview: a blue circle follows the index fingertip and turns green while pinched.
+"""Webcam preview: a blue circle follows the thumb tip and turns green while pinched.
 
 Use it to check pinch detection and tune --pinch-close / --pinch-open before using the full
 pipeline. Also holds helpers shared by the other scripts (camera setup, hand metrics, pinch tracker).
@@ -37,7 +37,7 @@ def camera_size(cap) -> list[int]:
 
 
 def hand_metrics(lm, w, h):
-    """Return (index fingertip pixel, pinch ratio) for one hand's landmarks.
+    """Return (thumb tip pixel, pinch ratio) for one hand's landmarks.
 
     Pinch ratio = thumb-tip to index-tip distance / palm length (wrist to middle knuckle):
     small when pinched, larger when the fingers are apart.
@@ -45,7 +45,7 @@ def hand_metrics(lm, w, h):
     px = lambda i: np.array([lm[i].x * w, lm[i].y * h])
     palm = max(np.linalg.norm(px(WRIST) - px(MIDDLE_MCP)), 1e-6)
     ratio = float(np.linalg.norm(px(THUMB_TIP) - px(INDEX_FINGER_TIP)) / palm)
-    return tuple(px(INDEX_FINGER_TIP)), ratio
+    return tuple(px(THUMB_TIP)), ratio  # thumb tip: it stays put while the index finger closes on it
 
 
 class PinchTracker:
@@ -76,8 +76,8 @@ def main() -> int:
     parser.add_argument("--camera", type=int, default=0)
     parser.add_argument("--timeout", type=float, default=300, help="max run time in seconds")
     parser.add_argument("--radius", type=int, default=20)
-    parser.add_argument("--pinch-close", type=float, default=0.20, help="ratio below which a pinch starts")
-    parser.add_argument("--pinch-open", type=float, default=0.25, help="ratio above which the pinch is released")
+    parser.add_argument("--pinch-close", type=float, default=0.18, help="ratio below which a pinch starts")
+    parser.add_argument("--pinch-open", type=float, default=0.23, help="ratio above which the pinch is released")
     parser.add_argument("--headless", action="store_true", help="no window; process 30 frames (for testing)")
     args = parser.parse_args()
 
@@ -125,8 +125,8 @@ def main() -> int:
                 if pinch(ratio):
                     pinches += 1
                     print(f"PINCH #{pinches} at t={time.monotonic() - start:.1f}s ratio={ratio:.2f}", flush=True)
-                thumb = (int(lm[THUMB_TIP].x * w), int(lm[THUMB_TIP].y * h))
-                cv2.circle(frame, thumb, 6, (255, 255, 255), -1)
+                index = (int(lm[INDEX_FINGER_TIP].x * w), int(lm[INDEX_FINGER_TIP].y * h))
+                cv2.circle(frame, index, 6, (255, 255, 255), -1)
                 cv2.circle(frame, (int(tip[0]), int(tip[1])), args.radius, GREEN_BGR if pinch.closed else BLUE_BGR, -1)
                 detections += 1
                 status = f"{'PINCHED' if pinch.closed else 'open'}  ratio {ratio:.2f}  (close<{args.pinch_close} open>{args.pinch_open})"

@@ -28,7 +28,7 @@ curl -L -o models/hand_landmarker.task \
 ```bash
 ./test
 ```
-A blue circle follows your index fingertip in the webcam preview and turns green while you pinch. The top line shows the thumb-to-index ratio. Tune with `--pinch-close` (default 0.20) and `--pinch-open` (default 0.25). Press `q` or Esc to quit.
+A blue circle follows your thumb tip in the webcam preview and turns green while you pinch. The top line shows the thumb-to-index ratio. Tune with `--pinch-close` (default 0.18) and `--pinch-open` (default 0.23). Press `q` or Esc to quit.
 
 ### 3. Calibrate
 ```bash
@@ -42,9 +42,9 @@ Point at each red crosshair and press SPACE (keep your finger visible and steady
 ./web-pointer --hit-test   # scored test, results printed as VP_HIT lines
 ./web-pointer --url https://example.com
 ```
-Hold your hand in a hook posture (index finger curled near the thumb) and move your hand to move the circle. The nearest clickable element within 50 px gets a blue outline (this includes elements inside web components, and `div`/`span` buttons with a pointer cursor). If nothing clickable is close, the paragraph, heading, list item, table cell, image or caption directly under the circle gets the outline instead. Pinch and release to select it: it gets a sticky green highlight and is written to `~/.cache/visionpointer/selection.json`. Pinch and release on empty space to clear. To click, pinch and hold still for 0.6 s: the circle turns purple and a real mouse click is sent to the centre of the element under it (the element is also selected). To scroll, pinch and drag your hand up or down: once you move past a small threshold the circle turns orange and the page follows your hand like a touchscreen (hand up scrolls down). A scroll does not change the selection. Press Esc in the browser to quit. On Hyprland the script asks for fullscreen itself, because pointing only maps correctly when the page fills the screen.
+Hold your hand with the index finger curled near the thumb and move your hand to move the circle. The circle sits on your thumb tip, which stays put while the index finger closes on it, so it does not jump when you pinch (calibrate with your thumb tip too). The nearest clickable element within 50 px gets a blue outline (this includes elements inside web components, and `div`/`span` buttons with a pointer cursor). If nothing clickable is close, the paragraph, heading, list item, table cell, image or caption directly under the circle gets the outline instead. Pinch and release to select it: it gets a sticky green highlight and is written to `~/.cache/visionpointer/selection.json`. Pinch and release on empty space to clear. To scroll, pinch and drag your hand up or down: once you move past a small threshold the circle turns orange and the page follows your hand like a touchscreen (hand up scrolls down). A scroll does not change the selection. To click, pinch and hold still for 0.6 s: the circle turns purple and a real mouse click is sent to the element. To go back or forward, pinch and drag your hand sideways (right = back, left = forward, like swiping a touchscreen). Press Esc in the browser to quit. On Hyprland the script asks for fullscreen itself, because pointing only maps correctly when the page fills the screen.
 
-Useful options: `--radius` (snap radius, px), `--dwell-ms` (also select after holding; 0 = off), `--smooth` / `--smooth-beta` (steadiness vs lag), `--scroll-threshold` (px of movement before a pinch becomes a scroll, default 40), `--scroll-gain` (scroll distance per px of hand movement, default 1.5), `--click-hold` (seconds to hold a pinch to click, default 0.6; 0 turns clicking off), `--confidence`, `--max-jump`, `--timeout` (default 300 s), `--debug-log file.csv` (per-frame positions and pinch ratio for tuning).
+Useful options: `--radius` (snap radius, px), `--dwell-ms` (also select after holding; 0 = off), `--smooth` / `--smooth-beta` (steadiness vs lag), `--scroll-threshold` (px of movement before a pinch becomes a scroll, default 40), `--scroll-gain` (scroll distance per px of hand movement, default 1.5), `--swipe-threshold` (px of sideways movement for back/forward, default 250, 0 = off), `--click-hold` (seconds to hold a pinch still to click, default 0.6, 0 = off), `--confidence`, `--max-jump`, `--timeout` (default 300 s), `--debug-log file.csv` (per-frame positions and pinch ratio for tuning).
 
 (`./test`, `./calibrate` and `./web-pointer` are launchers for the scripts in `src/`; all flags pass through.)
 
@@ -64,11 +64,11 @@ While `web_pointer.py` is running, select an element by pinching and ask the age
 
 ## Use Cases
 
-The same pointing, selecting, clicking and scrolling gestures serve several kinds of users. All of the following work in the demo today, inside the VisionPointer browser window.
+The same pointing, selecting, scrolling, clicking and back/forward gestures serve several kinds of users. All of the following work in the demo today, inside the VisionPointer browser window.
 
 * **Pointing at things for an AI agent (developers and general users).** Point at a button, paragraph, image or error message, pinch to select it, and ask an agent "what does this do?" or "fix this". The agent receives the selector, text, attributes, HTML, position and page URL through MCP, so there is no screenshotting or describing the element in words.
-* **Hands-free web navigation (accessibility).** For people who cannot comfortably use a mouse or keyboard: move the circle with your hand, snap onto links and buttons, pinch and hold to click, pinch and drag to scroll. Snapping to the nearest target makes small, shaky hand movements usable.
-* **Presenting and demonstrating (meetings and demos).** Drive a web-based slide deck or demo from a screen without a mouse: point at an item to highlight it, click through, and scroll, with the audience seeing the circle and the highlighted element.
+* **Hands-free web navigation (accessibility).** For people who cannot comfortably use a mouse or keyboard: move the circle with your hand, snap onto links and buttons, pinch to select, pinch and drag to scroll, pinch-and-hold to click, swipe sideways for back/forward. Snapping to the nearest target makes small, shaky hand movements usable.
+* **Presenting and demonstrating (meetings and demos).** Drive a web-based slide deck or demo from a screen without a mouse: point at an item to highlight it, scroll, with the audience seeing the circle and the highlighted element.
 * **Web development and QA.** Use the selector and bounding box of a pinched element to tell an agent exactly which part of a page a bug report or change request is about.
 
 Not covered yet: native (non-browser) apps, your everyday browser, pointing from across a room, and voice. See Section 9 for the build work.
@@ -150,7 +150,7 @@ The project follows a phased rollout across three primary hardware environments:
 
 ### 4.1 Calibration Protocol (Webcam Setup)
 1. **Interactive Prompt:** The UI displays four target crosshairs sequentially at screen corners $(0,0)$, $(W,0)$, $(W,H)$, and $(0,H)$.
-2. **Gesture Sampling:** The user points at each target. The camera records 10-15 landmark frames of the index fingertip (`INDEX_FINGER_TIP`).
+2. **Gesture Sampling:** The user points at each target. The camera records 10-15 landmark frames of the thumb tip (`THUMB_TIP`).
 3. **Homography Solver:** OpenCV calculates the perspective transform matrix $H$:
    $$\begin{bmatrix} x_{\text{screen}} \\ y_{\text{screen}} \\ 1 \end{bmatrix} = H \cdot \begin{bmatrix} x_{\text{camera}} \\ y_{\text{camera}} \\ 1 \end{bmatrix}$$
 4. **Persisted Matrix:** $H$ is stored locally for active session tracking.
@@ -293,7 +293,8 @@ Everything still to build, roughly in priority order. "Done" items are listed so
 ### Done
 * Hand tracking, 4-point calibration, smoothing and spike rejection.
 * Snapping to interactive elements, with hysteresis; selection of text and media blocks; open shadow DOM; `div`/`span` buttons with a pointer cursor.
-* Pinch-to-select, pinch-and-hold to click, pinch-and-drag to scroll.
+* Pinch-to-select, pinch-and-drag to scroll, pinch-and-hold to click, and pinch-and-swipe sideways for back/forward.
+* The pointer circle follows the thumb tip, so it does not jump when you pinch. Pinch thresholds are 0.18 to close and 0.23 to open.
 * MCP server with `get_selected_element` and `get_selection_history`.
 
 ### Next
@@ -302,7 +303,7 @@ Everything still to build, roughly in priority order. "Done" items are listed so
 3. **Iframes.** Cross-origin iframes are invisible to the injected script; selection and clicking inside them do not work yet.
 4. **Text-range selection.** Select a sentence or a span of words, not just a whole paragraph.
 5. **Selection across page navigation.** Keep or clear the selection sensibly after a click changes the page.
-6. **Back/forward and tab switching gestures.** A horizontal pinch-drag for back/forward was built and removed for now; tab switching was never started.
+6. **Tab switching gestures.** Back/forward (pinch-and-swipe sideways) is done; switching tabs was never started.
 7. **Pointing from a distance.** Presenters stand away from the screen, so the camera-to-screen mapping needs a different approach (a wider camera view, or pointing direction instead of fingertip position).
 8. **Touchscreen input source** alongside the webcam, using the same selection and MCP layer.
 9. **Hands-free voice** (Section 8), including a wake word and sending the request to the agent.

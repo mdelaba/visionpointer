@@ -153,7 +153,7 @@
       refresh();
       circle.style.display = 'block';
       circle.style.left = x + 'px'; circle.style.top = y + 'px';
-      circle.style.background = pinching === 'scroll' ? 'rgba(255,140,0,.9)' : pinching ? 'rgba(0,170,0,.9)' : 'rgba(0,0,255,.85)';
+      circle.style.background = pinching === 'scroll' ? 'rgba(255,140,0,.9)' : pinching === 'click' ? 'rgba(170,0,200,.9)' : pinching ? 'rgba(0,170,0,.9)' : 'rgba(0,0,255,.85)';
 
       let { best, bestD, curD } = pick(x, y);
       // hysteresis: keep the current element unless another is clearly closer.
@@ -174,6 +174,10 @@
       const { best } = pick(x, y);
       if (best) choose(best.el);
       else this.clear();
+      // where a click on the element should land (null when nothing is under the circle)
+      if (!best) return null;
+      const r = best.el.getBoundingClientRect();
+      return [r.left + r.width / 2, r.top + r.height / 2];
     },
     clear() {
       if (state.selected) { state.selected = null; console.log('VP_CLEAR'); }

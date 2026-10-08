@@ -1,8 +1,8 @@
-"""Point at web elements: fullscreen Chromium + calibrated fingertip + snapping + pinch select.
+"""Point at web elements: fullscreen Chromium + calibrated thumb tip + snapping + pinch select.
 
 Run calibrate_pointer.py first (it writes calibration.json). Pinch (thumb to index) and release to
 select the element you point at and keep it highlighted; pinch empty space to clear. Pinch and drag
-vertically to scroll instead (the circle turns orange). Selections are printed
+vertically to scroll (the circle turns orange) or horizontally to go back/forward. Pinch and hold still to click. Selections are printed
 as `VP_SELECT {json}` lines and written to the state dir (see selection_store.py). Press Esc in the browser to quit; exits after --timeout seconds.
 """
 import argparse
@@ -86,38 +86,50 @@ class OneEuroFilter:
 
 
 class PinchGesture:
-    """Turns pinch frames into actions: pinch+release selects, pinch+vertical drag scrolls.
+    """Turns pinch frames into actions.
 
-    step() returns a list of ("select", target) on release, or ("scroll_start", pos) then
-    ("scroll", wheel_delta) while dragging. Scrolling follows the hand like a touchscreen:
-    hand up -> content up (wheel delta positive).
+    Pinch+release selects. Pinch+hold (held still for hold_s) clicks. Pinch+vertical drag scrolls;
+    pinch+horizontal drag navigates (drag right = back, left = forward, like swiping a touchscreen).
+
+    step() returns ("select", target) on release, ("click", target) once the pinch has been held
+    still for hold_s, ("scroll_start", pos) then ("scroll", wheel_delta) while dragging vertically,
+    or ("back", None) / ("forward", None) once.
+    Scrolling follows the hand like a touchscreen: hand up -> content up (wheel delta positive).
     """
 
-    def __init__(self, threshold, gain):
-        self.threshold, self.gain = threshold, gain
+    def __init__(self, threshold, gain, swipe=0.0, hold_s=0.0):
+        self.threshold, self.gain, self.swipe, self.hold_s = threshold, gain, swipe, hold_s
         self.reset()
 
     def reset(self):
-        self.active = self.scrolling = False
-        self.target, self.start_y, self.last_y = None, 0.0, 0.0
+        self.active = self.scrolling = self.navigated = self.clicked = False
+        self.target, self.start, self.last_y, self.start_t = None, (0.0, 0.0), 0.0, 0.0
 
-    def step(self, confirmed, closed, pos, target):
+    def step(self, confirmed, closed, pos, target, now):
         actions = []
         if confirmed:
-            self.active, self.scrolling, self.target = True, False, target
-            self.start_y = self.last_y = pos[1]
+            self.active, self.scrolling, self.navigated, self.clicked, self.target = True, False, False, False, target
+            self.start, self.last_y, self.start_t = (pos[0], pos[1]), pos[1], now
         elif self.active:
             if closed:
-                if not self.scrolling and abs(pos[1] - self.start_y) > self.threshold:
-                    self.scrolling = True
-                    actions.append(("scroll_start", pos))
+                dx, dy = pos[0] - self.start[0], pos[1] - self.start[1]
+                if not (self.scrolling or self.navigated or self.clicked):
+                    if abs(dy) > self.threshold and abs(dy) >= abs(dx):
+                        self.scrolling = True
+                        actions.append(("scroll_start", pos))
+                    elif self.swipe > 0 and abs(dx) > self.swipe and abs(dx) > 2 * abs(dy):
+                        self.navigated = True
+                        actions.append(("back" if dx > 0 else "forward", None))
+                    elif self.hold_s > 0 and now - self.start_t >= self.hold_s:
+                        self.clicked = True
+                        actions.append(("click", self.target))
                 if self.scrolling:
                     actions.append(("scroll", -(pos[1] - self.last_y) * self.gain))
                     self.last_y = pos[1]
             else:
-                if not self.scrolling:
+                if not (self.scrolling or self.navigated or self.clicked):
                     actions.append(("select", self.target))
-                self.active = False
+                self.active = self.scrolling = self.navigated = self.clicked = False
         return actions
 
 
@@ -143,8 +155,8 @@ def main() -> int:
     parser.add_argument("--radius", type=int, default=50, help="snap radius in px")
     parser.add_argument("--no-snap", action="store_true", help="only exact hits count")
     parser.add_argument("--dwell-ms", type=int, default=0, help="also select after holding this long (0 = off, pinch only)")
-    parser.add_argument("--pinch-close", type=float, default=0.20, help="thumb-index/palm ratio below which a pinch starts")
-    parser.add_argument("--pinch-open", type=float, default=0.25, help="ratio above which the pinch is released")
+    parser.add_argument("--pinch-close", type=float, default=0.18, help="thumb-index/palm ratio below which a pinch starts")
+    parser.add_argument("--pinch-open", type=float, default=0.23, help="ratio above which the pinch is released")
     parser.add_argument("--pinch-lookback", type=float, default=0.25, help="seconds: select where you pointed this long ago (the pinch moves the fingertip)")
     parser.add_argument("--smooth", type=float, default=0.45, help="base cutoff Hz: lower = steadier but laggier")
     parser.add_argument("--confidence", type=float, default=0.7, help="MediaPipe hand detection/presence/tracking threshold")
@@ -153,6 +165,8 @@ def main() -> int:
     parser.add_argument("--smooth-beta", type=float, default=0.01, help="speed term: higher = less lag when moving fast")
     parser.add_argument("--scroll-threshold", type=float, default=40, help="screen px of vertical movement while pinched before it becomes a scroll")
     parser.add_argument("--scroll-gain", type=float, default=1.5, help="scroll distance per px of hand movement")
+    parser.add_argument("--swipe-threshold", type=float, default=250, help="screen px of horizontal movement while pinched that triggers back/forward (0 = off)")
+    parser.add_argument("--click-hold", type=float, default=0.6, help="seconds to hold a pinch still to click (0 = off)")
     parser.add_argument("--hit-test", action="store_true", help="run the test page's scored hit test")
     args = parser.parse_args()
 
@@ -221,7 +235,7 @@ def main() -> int:
             smoother = OneEuroFilter(args.smooth, args.smooth_beta)
             spikes = SpikeRejector(args.max_jump)
             pinch = PinchTracker(args.pinch_close, args.pinch_open)
-            gesture = PinchGesture(args.scroll_threshold, args.scroll_gain)
+            gesture = PinchGesture(args.scroll_threshold, args.scroll_gain, args.swipe_threshold, args.click_hold)
             history = collections.deque()  # (time, fx, fy) smoothed screen fractions
             if args.debug_log:
                 log = open(args.debug_log, "w")
@@ -251,14 +265,22 @@ def main() -> int:
                 # scale by the live viewport so resizing/fullscreen mid-run stays correct
                 page.evaluate(
                     "([fx, fy, p]) => window.__vp.update(fx * innerWidth, fy * innerHeight, p)",
-                    [fx, fy, "scroll" if gesture.scrolling else pinch.closed],
+                    [fx, fy, "scroll" if gesture.scrolling else "click" if gesture.clicked else pinch.closed],
                 )
                 confirmed = pinch(ratio)
                 # closing the pinch moves the fingertip, so select where it was pointing just before
                 _, px, py = min(history, key=lambda h: abs(h[0] - (now - args.pinch_lookback)))
-                for action, value in gesture.step(confirmed, pinch.closed, smoothed, (px, py)):
+                for action, value in gesture.step(confirmed, pinch.closed, smoothed, (px, py), now):
                     if action == "select":
                         page.evaluate("([fx, fy]) => window.__vp.selectAt(fx * innerWidth, fy * innerHeight)", list(value))
+                    elif action == "click":
+                        # select (sticky highlight) then send a real mouse click at the element's centre
+                        c = page.evaluate("([fx, fy]) => window.__vp.selectAt(fx * innerWidth, fy * innerHeight)", list(value))
+                        if c:
+                            page.mouse.click(c[0], c[1])
+                    elif action in ("back", "forward"):
+                        selection_store.clear_selection()
+                        (page.go_back if action == "back" else page.go_forward)(timeout=10000)
                     elif action == "scroll_start":
                         page.mouse.move(float(value[0]), float(value[1]))  # wheel events go to what is under the mouse
                     elif action == "scroll":
