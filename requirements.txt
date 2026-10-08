@@ -1,10 +1,6 @@
 opencv-python
 mediapipe==0.10.21
-mss
-openai
-python-dotenv
 numpy<2
-PyQt6
 screeninfo
 playwright
 mcp>=2
