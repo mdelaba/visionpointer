@@ -202,6 +202,35 @@ def capture_selection(page, point):
     }, sel["selected_at"]
 
 
+def capture_page(page, want_shot, shots_on):
+    """Describe the current page (and screenshot it when allowed); used when the user has nothing selected."""
+    page.evaluate("document.documentElement.setAttribute('data-vp-hide', '1')")  # hidden overlays are excluded from innerText too
+    try:
+        info = page.evaluate(
+            "() => ({ url: location.href, title: document.title, viewport: [innerWidth, innerHeight],"
+            " scroll: [scrollX, scrollY], page_height: document.documentElement.scrollHeight,"
+            " text: (document.body ? document.body.innerText : '').trim().slice(0, 3000) })"
+        )
+        png = page.screenshot(type="png", timeout=5000) if want_shot and shots_on else None
+    finally:
+        page.evaluate("document.documentElement.removeAttribute('data-vp-hide')")
+    if png is not None:
+        img = cv2.imdecode(np.frombuffer(png, np.uint8), cv2.IMREAD_COLOR)
+        k = min(1.0, SHOT_MAX / max(img.shape[:2]))
+        if k < 1:
+            img = cv2.resize(img, None, fx=k, fy=k, interpolation=cv2.INTER_AREA)
+        out = selection_store.SCREENSHOT_DIR
+        out.mkdir(parents=True, exist_ok=True)
+        for old in out.glob("*_page.png"):
+            old.unlink(missing_ok=True)
+        path = out / f"{int(time.time() * 1000)}_page.png"
+        cv2.imwrite(str(path), img)
+        info.update(screenshot=str(path), image_size=[img.shape[1], img.shape[0]])
+    elif want_shot:
+        info["screenshot_unavailable"] = "web_pointer must be started with --screenshots (off by default for privacy)"
+    return info
+
+
 def ensure_fullscreen(page, sw, sh, wait=5.0):
     """Pointer mapping assumes the page fills the screen; on Hyprland, ask for fullscreen."""
     def size():
@@ -333,6 +362,13 @@ def main() -> int:
                 log.write("t,detected,cam_x,cam_y,mapped_x,mapped_y,filt_x,filt_y,pinch\n")
             while time.monotonic() < deadline and not quit_flag and not page.is_closed():
                 pt, ratio = read_hand(landmarker, cap, t0, cam_size)
+                req = selection_store.take_page_request()
+                if req:  # a reader (the MCP server) asked what is on the page
+                    try:
+                        info = capture_page(page, req.get("screenshot"), args.screenshots)
+                    except Exception as e:
+                        info = {"error": str(e)}
+                    selection_store._write_atomic(selection_store.PAGE_FILE, json.dumps({**info, "requested_at": req["requested_at"]}))
                 if voice:
                     if pt is not None:
                         voice.hand_seen()

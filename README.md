@@ -40,7 +40,7 @@ A blue circle follows your thumb tip in the webcam preview and turns green while
 ```bash
 ./calibrate --recalibrate
 ```
-Point at each red crosshair and press SPACE (keep your finger visible and steady while it samples). This saves `calibration.json`, which is only valid for the same screen size and camera resolution, so recalibrate if either changes. Afterwards the script shows the circle on a fullscreen canvas so you can check the accuracy. Press `c` to recalibrate and `q` to quit.
+Hold your hand at the distance and height you will normally use, with the camera in its final position (moving the camera or sitting much closer or farther later makes the pointer drift). Point at each red crosshair with your **thumb tip** (the circle follows the thumb tip, so calibrate with it) and press SPACE, keeping your hand visible and steady while it samples. This saves `calibration.json`, which is only valid for the same screen size and camera resolution, so recalibrate if either changes. Afterwards the script shows the circle on a fullscreen canvas so you can check the accuracy. Press `c` to recalibrate and `q` to quit.
 
 ### 4. Point at web elements
 ```bash
@@ -54,15 +54,45 @@ Useful options: `--radius` (snap radius, px), `--dwell-ms` (also select after ho
 
 (`./test`, `./calibrate` and `./web-pointer` are launchers for the scripts in `src/`; all flags pass through.)
 
-### 5. Connect an agent (MCP)
+### 5. Voice quick-start (optional)
+Needs the Piper voice from step 1, a microphone, PipeWire and the MCP server from step 6 registered.
+```bash
+./web-pointer --voice --screenshots --url https://en.wikipedia.org/wiki/Hand
+```
+Wait for "Voice ready" in the terminal (the first run downloads the Whisper model), then hold your hand in view, point at something, pinch-select it and just ask: "what is this?". The banner at the bottom of the page shows what it hears and says. It only listens while a hand is visible. Say "new conversation" to reset context. Drop `--screenshots` if you do not want Claude to be able to see the page. More details in Section 8.
+
+### 6. Connect an agent (MCP)
 ```bash
 claude mcp add visionpointer -- "$PWD/.venv/bin/python" "$PWD/src/mcp_server.py"
 ```
 While `web_pointer.py` is running, select an element by pinching and ask the agent about "this". It calls `get_selected_element` (and `get_selection_history`) to see the selector, text, attributes, HTML snippet, bounding box, page URL/title, and how long ago it was selected. For other agents, register `src/mcp_server.py` as a stdio MCP server, or read the JSON state files directly. Set `VP_STATE_DIR` to change where they are stored.
 
+**Nothing selected.** If you ask while nothing is selected, `get_selected_element` returns the page you are on instead: URL, title, viewport, scroll position, page height and the first 3,000 characters of visible text. `get_selection_screenshot` then returns a screenshot of the whole current page (needs `--screenshots`). This works only while `web_pointer` is running; the screenshot is taken at the moment of the request.
+
 **Screenshots (opt-in).** Start with `--screenshots` and each selection also saves a screenshot, so the agent can look at the page when a question needs it ("what does this picture show?", "where is that button?"). The agent asks for it through a separate MCP tool, `get_selection_screenshot(view)`, so text-only questions never pay for an image. Views: `annotated` (the visible page with a red box around the selected element and a crosshair where you pointed), `crop` (the element with a small margin) and `clean` (no marks). The result also gives the element box and pointer position in image pixels and as 0 to 1 fractions, the viewport size and the device pixel ratio. Images are scaled to at most 1568 px on the long side.
 
 Privacy: screenshots can contain anything on the page, such as email or banking, and are sent to Anthropic when the agent looks at one. That is why this is off by default. They are saved in `~/.cache/visionpointer/screenshots/` (three PNGs per selection, named by timestamp: `_annotated`, `_crop`, `_clean`), only the last 5 selections are kept, and they are deleted when the selection is cleared or the program exits.
+
+### Flag reference (`./web-pointer`)
+| Flag | Default | Meaning |
+|---|---|---|
+| `--url` | test page | page to open |
+| `--camera` | 0 | camera index |
+| `--timeout` | 300 | max run time, seconds |
+| `--radius` / `--no-snap` | 50 | snap radius in px / only exact hits count |
+| `--dwell-ms` | 0 | also select after holding this long (0 = off) |
+| `--pinch-close` / `--pinch-open` | 0.18 / 0.23 | thumb-index ratio to start / end a pinch |
+| `--pinch-lookback` | 0.25 | select where you pointed this many seconds ago |
+| `--smooth` / `--smooth-beta` | 0.45 / 0.01 | steadiness vs lag |
+| `--max-jump` | 300 | ignore single-frame jumps above this many px |
+| `--confidence` | 0.8 | hand detection threshold |
+| `--scroll-threshold` / `--scroll-gain` | 40 / 1.2 | px before a pinch scrolls / scroll per px of hand |
+| `--swipe-threshold` | 250 | sideways px for back/forward (0 = off) |
+| `--click-hold` | 0.6 | seconds to hold a pinch to click (0 = off) |
+| `--voice` | off | talk to Claude, listening only while a hand is visible |
+| `--voice-model` / `--voice-silence` | haiku / 0.8 | Claude model / seconds of silence that end a question |
+| `--screenshots` | off | save screenshots so Claude can see the page (privacy) |
+| `--hit-test` / `--debug-log` | off | scored test page / per-frame CSV |
 
 ### Troubleshooting
 * **Circle only reaches part of the screen:** the browser isn't fullscreen. Make the window fullscreen.
@@ -271,7 +301,7 @@ mic (PipeWire default) -> only while a hand is visible -> record until 0.8 s of 
 * Listens only while a hand is detected (1 s grace); the microphone process is closed when no hand is in view and while Claude thinks and speaks, so it never hears its own voice.
 * Only text goes to Claude. Audio is transcribed and spoken on this machine.
 * Context carries over: the session id is stored in `~/.cache/visionpointer/voice/session_id` and resumed on each question. Say "new conversation" (or "start over") to reset it.
-* Claude is limited to the read-only visionpointer tools (including the opt-in screenshot tool, see Section 4 step 5), and the call loads only the visionpointer MCP server (your other MCP servers would add seconds per question). Each `claude -p` call has a 90 s timeout.
+* Claude is limited to the read-only visionpointer tools (including the opt-in screenshot tool, see Section 4 step 6), and the call loads only the visionpointer MCP server (your other MCP servers would add seconds per question). Each `claude -p` call has a 90 s timeout.
 * Models: `models/whisper` (base.en, about 140 MB, downloaded on first use) and `models/piper` (about 60 MB, see install). The status and last exchange show at the bottom of the page.
 * Options: `--voice`, `--voice-model` (default `haiku` for speed; try `sonnet` for deeper answers), `--voice-silence` (seconds of silence that end a question).
 * If it feels slow: shorten `--voice-silence`. Startup of `claude -p` is the main delay (about 4 s before the first sentence in testing); the model itself takes under 2 s with haiku. A long-lived Claude process would remove the startup cost.
@@ -323,7 +353,7 @@ Everything still to build, roughly in priority order. "Done" items are listed so
 * Pinch-to-select, pinch-and-drag to scroll, pinch-and-hold to click, and pinch-and-swipe sideways for back/forward.
 * The pointer circle follows the thumb tip, so it does not jump when you pinch. Pinch thresholds are 0.18 to close and 0.23 to open.
 * Voice (`--voice`): hands-free questions about the pointed-at element, spoken answers, local speech models, resumed Claude session.
-* MCP server with `get_selected_element`, `get_selection_history` and `get_selection_screenshot`.
+* MCP server with `get_selected_element`, `get_selection_history` and `get_selection_screenshot`; with nothing selected they return the current page's info and screenshot.
 * Screenshots (`--screenshots`, opt-in): annotated page, element crop and clean page saved with each selection and fetched by the agent only when a question needs to see the page.
 
 ### Next

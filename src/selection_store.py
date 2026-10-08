@@ -14,6 +14,8 @@ STATE_DIR = Path(os.environ.get("VP_STATE_DIR", "~/.cache/visionpointer")).expan
 SELECTION_FILE = STATE_DIR / "selection.json"
 HISTORY_FILE = STATE_DIR / "history.jsonl"
 SCREENSHOT_DIR = STATE_DIR / "screenshots"  # only written with web_pointer --screenshots
+REQUEST_FILE = STATE_DIR / "page_request.json"  # reader -> pointer: "describe the page now" (used when nothing is selected)
+PAGE_FILE = STATE_DIR / "page.json"  # pointer -> reader: the answer
 
 
 def _write_atomic(path: Path, text: str) -> None:
@@ -83,3 +85,30 @@ def read_history(limit: int = 5) -> list:
         except ValueError:
             pass
     return out[::-1]  # newest first
+
+
+def request_page(screenshot: bool, timeout: float = 8.0):
+    """Ask the running pointer for the current page (url, title, text, optional screenshot); None if it does not answer."""
+    stamp = time.time()
+    _write_atomic(REQUEST_FILE, json.dumps({"requested_at": stamp, "screenshot": screenshot}))
+    end = time.monotonic() + timeout
+    while time.monotonic() < end:
+        try:
+            page = json.loads(PAGE_FILE.read_text())
+            if page.get("requested_at") == stamp:
+                return page
+        except (OSError, ValueError):
+            pass
+        time.sleep(0.1)
+    REQUEST_FILE.unlink(missing_ok=True)
+    return None
+
+
+def take_page_request():
+    """Pointer side: return a pending page request (and consume it), or None."""
+    try:
+        req = json.loads(REQUEST_FILE.read_text())
+        REQUEST_FILE.unlink(missing_ok=True)
+        return req
+    except (OSError, ValueError):
+        return None
