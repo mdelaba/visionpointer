@@ -10,13 +10,13 @@ https://github.com/user-attachments/assets/339617e5-d584-4287-b0bf-3c75d8cf7eb0
 
 ## Getting Started
 
-VisionPointer lets you point at a web page with your hand in front of a webcam, pinch your thumb and index finger to select an element, and hand that element to an AI agent through an MCP server.
+You hold your hand in front of a webcam and move a circle over a web page. Pinching your thumb and index finger selects the element under it, and the selection goes to an AI agent through an MCP server. You can also just ask the agent about it out loud (see Voice).
 
 ### Requirements
 * Linux with a webcam (developed on Arch + Hyprland; the browser runs under Wayland/XWayland)
 * [uv](https://docs.astral.sh/uv/) and Python 3.11 (uv installs it if needed)
 * Optional: Claude Code (or any MCP-capable agent) to consume the selection
-* Optional, for voice: PipeWire (`pw-record` and `pw-play`) and a working microphone
+* Optional, for voice: [Claude Code](https://claude.com/claude-code) installed and signed in (voice runs `claude -p`), PipeWire (`pw-record` and `pw-play`), and a working microphone
 
 ### 1. Install
 ```bash
@@ -56,16 +56,14 @@ Hold your hand at the distance and height you will normally use, with the camera
 ```
 Hold your hand with the index finger curled near the thumb and move your hand to move the circle. The circle sits on your thumb tip, which stays put while the index finger closes on it, so it does not jump when you pinch (calibrate with your thumb tip too). The nearest clickable element within 50 px gets a blue outline (this includes elements inside web components, and `div`/`span` buttons with a pointer cursor). If nothing clickable is close, the paragraph, heading, list item, table cell, image or caption directly under the circle gets the outline instead. Pinch and release to select it: it gets a sticky green highlight and is written to `~/.cache/visionpointer/selection.json`. Pinch and release on empty space to clear. To scroll, pinch and drag your hand up or down: once you move past a small threshold the circle turns orange and the page follows your hand like a touchscreen (hand up scrolls down). A scroll does not change the selection. To click, pinch and hold still for 0.6 s: the circle turns purple and a real mouse click is sent to the element. To go back or forward, pinch and drag your hand sideways (right = back, left = forward, like swiping a touchscreen). Press Esc in the browser to quit. On Hyprland the script asks for fullscreen itself, because pointing only maps correctly when the page fills the screen.
 
-Useful options: `--radius` (snap radius, px), `--dwell-ms` (also select after holding; 0 = off), `--smooth` / `--smooth-beta` (steadiness vs lag), `--scroll-threshold` (px of movement before a pinch becomes a scroll, default 40), `--scroll-gain` (scroll distance per px of hand movement, default 1.2), `--swipe-threshold` (px of sideways movement for back/forward, default 250, 0 = off), `--click-hold` (seconds to hold a pinch still to click, default 0.6, 0 = off), `--confidence` (hand detection threshold, default 0.8), `--max-jump`, `--timeout` (default 300 s), `--debug-log file.csv` (per-frame positions and pinch ratio for tuning).
-
 (`./test`, `./calibrate` and `./web-pointer` are launchers for the scripts in `src/`; all flags pass through.)
 
 ### 5. Voice quick-start (optional)
-Needs the Piper voice from step 1, a microphone, PipeWire and the MCP server from step 6 registered.
+Needs Claude Code installed and signed in, the Piper voice from step 1, a microphone and PipeWire. You do not need to register the MCP server in step 6: voice gives its own `claude -p` calls just the VisionPointer tools.
 ```bash
 ./web-pointer --voice --screenshots --url https://en.wikipedia.org/wiki/Hand
 ```
-Wait for "Voice ready" in the terminal (the first run downloads the Whisper model), then hold your hand in view, point at something, pinch-select it and just ask: "what is this?". The banner at the bottom of the page shows what it hears and says. It only listens while a hand is visible. Say "new conversation" to reset context. Drop `--screenshots` if you do not want Claude to be able to see the page. More details in [docs/VOICE.md](docs/VOICE.md).
+Wait for "Voice ready" in the terminal (the first run downloads the Whisper model), then hold your hand in view, point at something, pinch-select it and just ask: "what is this?". The banner at the bottom of the page shows what it hears and says. It only listens while a hand is visible. Say "new conversation" to reset context. Speech is transcribed on your machine and spoken back locally, but the text of your question and the selected element are sent to Claude (and a screenshot too, if `--screenshots` is on and Claude asks for one). Use headphones if you record a demo, otherwise a microphone can pick up the spoken reply. Drop `--screenshots` if you do not want Claude to be able to see the page. More details in [docs/VOICE.md](docs/VOICE.md).
 
 ### 6. Connect an agent (MCP)
 ```bash
@@ -77,9 +75,10 @@ While `web_pointer.py` is running, select an element by pinching and ask the age
 
 **Screenshots (opt-in).** Start with `--screenshots` and each selection also saves a screenshot, so the agent can look at the page when a question needs it ("what does this picture show?", "where is that button?"). The agent asks for it through a separate MCP tool, `get_selection_screenshot(view)`, so text-only questions never pay for an image. Views: `annotated` (the visible page with a red box around the selected element and a crosshair where you pointed), `crop` (the element with a small margin) and `clean` (no marks). The result also gives the element box and pointer position in image pixels and as 0 to 1 fractions, the viewport size and the device pixel ratio. Images are scaled to at most 1568 px on the long side.
 
-Privacy: screenshots can contain anything on the page, such as email or banking, and are sent to Anthropic when the agent looks at one. That is why this is off by default. They are saved in `~/.cache/visionpointer/screenshots/` (three PNGs per selection, named by timestamp: `_annotated`, `_crop`, `_clean`), only the last 5 selections are kept, and they are deleted when the selection is cleared or the program exits.
+Privacy: screenshots can contain anything on the page, such as email or banking, and are sent to the model provider (Anthropic, if the agent is Claude) when the agent looks at one. That is why this is off by default. They are saved in `~/.cache/visionpointer/screenshots/` (three PNGs per selection, named by timestamp: `_annotated`, `_crop`, `_clean`), only the last 5 selections are kept, and they are deleted when the selection is cleared or the program exits.
 
-**Recording a demo with the camera in a corner.** `./web-pointer --preview` opens a small webcam window (320 px wide) showing your hand, a circle on the thumb tip (green while pinched) and a white dot on the index tip. It floats over the screen, so `wf-recorder` captures it along with the page. To pin it to a corner in Hyprland, add window rules for the title `VisionPointer`: `float`, `pin`, `size 320 180` and `move 100%-340 100%-200`. Start `web-pointer` first, then the recording, and make sure the pointer window is the focused one when it goes fullscreen.
+### Recording a demo
+`./web-pointer --preview` opens a small webcam window (320 px wide) showing your hand, a circle on the thumb tip (green while pinched) and a white dot on the index tip. It floats over the screen, so `wf-recorder` captures it along with the page. To pin it to a corner in Hyprland, add window rules for the title `VisionPointer`: `float`, `pin`, `size 320 180` and `move 100%-340 100%-200`. Start `web-pointer` first, then the recording, and make sure the pointer window is the focused one when it goes fullscreen.
 
 ### Flag reference (`./web-pointer`)
 | Flag | Default | Meaning |
@@ -101,13 +100,17 @@ Privacy: screenshots can contain anything on the page, such as email or banking,
 | `--voice-model` / `--voice-silence` | haiku / 0.8 | Claude model / seconds of silence that end a question |
 | `--preview` | off | small mirrored webcam window with the tracked hand (for demo recordings) |
 | `--screenshots` | off | save screenshots so Claude can see the page (privacy) |
-| `--hit-test` / `--debug-log` | off | scored test page / per-frame CSV |
+| `--hit-test` / `--debug-log` | off | scored test page / per-frame CSV for tuning (positions and pinch ratio) |
 
 ### Troubleshooting
 * **Circle only reaches part of the screen:** the browser isn't fullscreen. Make the window fullscreen.
 * **"No calibration for this screen size and camera resolution":** run step 3 again.
 * **Jittery pointer or jumps:** check lighting (the camera drops its frame rate in dim light), raise `--confidence` (hand detection threshold, default 0.8), or lower `--smooth`.
 * **Camera not found:** try `--camera 1` (or check `ls /dev/video*`).
+* **Voice does not hear you or hears noise:** check the default microphone with `wpctl status`; if its volume is low, raise it with `wpctl set-volume @DEFAULT_AUDIO_SOURCE@ 0.6`. Fans and typing can trigger it, see [docs/VOICE.md](docs/VOICE.md) for how noise is handled.
+* **"Voice unavailable" at startup:** the Piper voice or a package is missing; repeat the voice download in step 1 and `uv pip install -r requirements.txt`.
+* **Voice answers feel slow:** the delay is mostly `claude -p` starting up (about 4 s). Shorten `--voice-silence` to end your question sooner, or keep the default `haiku` model.
+* **Claude says nothing is selected or cannot see the page:** the pointer must be running (`web_pointer`), and screenshots need `--screenshots`.
 
 ---
 
