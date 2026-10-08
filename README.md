@@ -73,6 +73,8 @@ While `web_pointer.py` is running, select an element by pinching and ask the age
 
 Privacy: screenshots can contain anything on the page, such as email or banking, and are sent to Anthropic when the agent looks at one. That is why this is off by default. They are saved in `~/.cache/visionpointer/screenshots/` (three PNGs per selection, named by timestamp: `_annotated`, `_crop`, `_clean`), only the last 5 selections are kept, and they are deleted when the selection is cleared or the program exits.
 
+**Recording a demo with the camera in a corner.** `./web-pointer --preview` opens a small webcam window (320 px wide) showing your hand, a circle on the thumb tip (green while pinched) and a white dot on the index tip. It floats over the screen, so `wf-recorder` captures it along with the page. To pin it to a corner in Hyprland, add window rules for the title `VisionPointer`: `float`, `pin`, `size 320 180` and `move 100%-340 100%-200`. Start `web-pointer` first, then the recording, and make sure the pointer window is the focused one when it goes fullscreen.
+
 ### Flag reference (`./web-pointer`)
 | Flag | Default | Meaning |
 |---|---|---|
@@ -91,6 +93,7 @@ Privacy: screenshots can contain anything on the page, such as email or banking,
 | `--click-hold` | 0.6 | seconds to hold a pinch to click (0 = off) |
 | `--voice` | off | talk to Claude, listening only while a hand is visible |
 | `--voice-model` / `--voice-silence` | haiku / 0.8 | Claude model / seconds of silence that end a question |
+| `--preview` | off | small mirrored webcam window with the tracked hand (for demo recordings) |
 | `--screenshots` | off | save screenshots so Claude can see the page (privacy) |
 | `--hit-test` / `--debug-log` | off | scored test page / per-frame CSV |
 

@@ -37,11 +37,12 @@ def screen_size() -> tuple[int, int]:
         return 1920, 1080
 
 
-def read_hand(landmarker, cap, t0, cam_size):
+def read_hand(landmarker, cap, t0, cam_size, out=None):
     """Return (fingertip camera pixel, pinch ratio), or (None, None) if no hand.
 
     Pinch ratio = thumb-tip to index-tip distance / palm length (wrist to middle knuckle):
     roughly 0.1-0.25 when pinched, much larger when the hand is open.
+    If out (a dict) is given it receives the raw frame and the index tip pixel (for a preview window).
     """
     ok, frame = cap.read()
     if not ok:
@@ -51,9 +52,14 @@ def read_hand(landmarker, cap, t0, cam_size):
     rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
     image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb)
     result = landmarker.detect_for_video(image, int((time.monotonic() - t0) * 1000))
+    if out is not None:
+        out.update(frame=frame, index=None)
     if not result.hand_landmarks:
         return None, None
-    return hand_metrics(result.hand_landmarks[0], w, h)
+    lm = result.hand_landmarks[0]
+    if out is not None:
+        out["index"] = (int(lm[8].x * w), int(lm[8].y * h))
+    return hand_metrics(lm, w, h)
 
 
 def fingertip(landmarker, cap, t0, cam_size):

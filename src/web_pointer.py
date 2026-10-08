@@ -202,6 +202,22 @@ def capture_selection(page, point):
     }, sel["selected_at"]
 
 
+PREVIEW_WINDOW = "VisionPointer"
+PREVIEW_W = 320
+
+
+def show_preview(seen, tip, closed):
+    """Small mirrored webcam window: white dot on the index tip, circle on the thumb tip (green while pinched)."""
+    frame = cv2.flip(seen["frame"], 1)
+    h, w = frame.shape[:2]
+    if tip is not None:
+        cv2.circle(frame, (int(w - tip[0]), int(tip[1])), 30, (0, 200, 0) if closed else (255, 0, 0), -1)
+        if seen.get("index"):
+            cv2.circle(frame, (w - seen["index"][0], seen["index"][1]), 8, (255, 255, 255), -1)
+    cv2.imshow(PREVIEW_WINDOW, cv2.resize(frame, (PREVIEW_W, PREVIEW_W * h // w), interpolation=cv2.INTER_AREA))
+    cv2.waitKey(1)
+
+
 def capture_page(page, want_shot, shots_on):
     """Describe the current page (and screenshot it when allowed); used when the user has nothing selected."""
     page.evaluate("document.documentElement.setAttribute('data-vp-hide', '1')")  # hidden overlays are excluded from innerText too
@@ -269,6 +285,7 @@ def main() -> int:
     parser.add_argument("--voice-model", default="haiku", help="Claude model for voice answers (haiku is fastest; e.g. sonnet for deeper answers)")
     parser.add_argument("--voice-silence", type=float, default=0.8, help="seconds of silence that end your question")
     parser.add_argument("--screenshots", action="store_true", help="save a screenshot with each selection so Claude can look at it when a question needs it (off by default: screenshots can contain private page content)")
+    parser.add_argument("--preview", action="store_true", help="show a small webcam window with the hand tracking (for recording demos)")
     parser.add_argument("--hit-test", action="store_true", help="run the test page's scored hit test")
     args = parser.parse_args()
 
@@ -361,7 +378,8 @@ def main() -> int:
                 log = open(args.debug_log, "w")
                 log.write("t,detected,cam_x,cam_y,mapped_x,mapped_y,filt_x,filt_y,pinch\n")
             while time.monotonic() < deadline and not quit_flag and not page.is_closed():
-                pt, ratio = read_hand(landmarker, cap, t0, cam_size)
+                seen = {} if args.preview else None
+                pt, ratio = read_hand(landmarker, cap, t0, cam_size, seen)
                 req = selection_store.take_page_request()
                 if req:  # a reader (the MCP server) asked what is on the page
                     try:
@@ -376,6 +394,8 @@ def main() -> int:
                         shown_status = (voice.status, voice.caption)
                         page.evaluate("([s, c]) => window.__vp.setStatus(s, c)", list(shown_status))
                 if pt is None:
+                    if seen:
+                        show_preview(seen, None, False)
                     if log:
                         log.write(f"{time.monotonic() - t0:.3f},0,,,,,,,\n")
                     smoother.reset()
@@ -401,6 +421,8 @@ def main() -> int:
                     [fx, fy, "scroll" if gesture.scrolling else "click" if gesture.clicked else pinch.closed],
                 )
                 confirmed = pinch(ratio)
+                if seen:
+                    show_preview(seen, pt, pinch.closed)
                 # closing the pinch moves the fingertip, so select where it was pointing just before
                 _, px, py = min(history, key=lambda h: abs(h[0] - (now - args.pinch_lookback)))
                 for action, value in gesture.step(confirmed, pinch.closed, smoothed, (px, py), now):
@@ -432,6 +454,7 @@ def main() -> int:
         if log:
             log.close()
         selection_store.clear_screenshots()  # they can show private page content
+        cv2.destroyAllWindows()
         cap.release()
         landmarker.close()
     return 0
