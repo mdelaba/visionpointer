@@ -265,6 +265,8 @@ def main() -> int:
                         page.mouse.wheel(0, float(value))
             browser.close()
     except Exception as e:  # camera/browser failures should end cleanly, not hang
+        if "has been closed" in str(e):  # the window was closed (Esc/quit) mid-frame: a normal exit
+            return 0
         print(f"Error: {e}", file=sys.stderr)
         return 1
     finally:
