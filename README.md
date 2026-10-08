@@ -1,6 +1,8 @@
 # VisionPointer: Comprehensive Project Plan & Architecture
 
-https://github.com/user-attachments/assets/b5b378a5-1241-43b0-b4c9-a07b4fbf45dc
+
+https://github.com/user-attachments/assets/339617e5-d584-4287-b0bf-3c75d8cf7eb0
+
 
 ---
 
