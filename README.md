@@ -174,7 +174,7 @@ The project follows a phased rollout across three primary hardware environments:
 ```text
              ┌──────────────────────────────────────────────────┐
              │       OPEN SOURCE CORE ENGINE (GitHub)           │
-             │   - MIT/Apache License                           │
+             │   - Apache License 2.0                           │
              │   - Python/JS Gesture Tracking Engine            │
              │   - Homography Calibration Tool                  │
              │   - Basic CLI / Browser Extension                │
@@ -318,3 +318,9 @@ Similar to Google's Circle to Search: the user draws a loop around any part of t
 * **Hand-off:** extend the MCP server with a `get_circled_region` tool returning the screenshot, text and elements, plus an entry in the selection history. The agent then answers questions about "this part" without the user describing it.
 * **Beyond the browser:** with the native-app work above, the same gesture can capture any screen region through a screenshot. Searching the web for the circled content is just one thing an agent can do with it.
 * **Open questions:** how to tell a deliberate loop from a normal hand movement (closure and size thresholds), and how to handle regions that cross iframes.
+
+---
+
+## License
+
+Apache License 2.0. See [LICENSE](LICENSE).
