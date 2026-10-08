@@ -3,8 +3,10 @@
 (() => {
   if (window.__vp) return;
   const SELECTOR = 'a[href], button, input, select, textarea, summary, [role=button], [role=link], [onclick], [tabindex]:not([tabindex="-1"])';
+  // Page text/media that can be selected when the circle is directly over it and no interactive element is close.
+  const CONTENT = 'p, h1, h2, h3, h4, h5, h6, li, img, picture, video, figure, figcaption, blockquote, pre, td, th, dt, dd, caption, label';
   // dwellMs 0 = dwell selection off (pinch is the main trigger)
-  const state = { radius: 50, snap: true, dwellMs: 0, hysteresis: 20, cur: null, since: 0, fired: false, boxes: [], boxesAt: -Infinity, selected: null };
+  const state = { radius: 50, contentSnap: 12, content: [], snap: true, dwellMs: 0, hysteresis: 20, cur: null, since: 0, fired: false, boxes: [], boxesAt: -Infinity, selected: null };
 
   const mk = (css) => { const d = document.createElement('div'); d.style.cssText = 'position:fixed;pointer-events:none;z-index:2147483647;display:none;box-sizing:border-box;' + css; document.documentElement.appendChild(d); return d; };
   let circle, hover, sel, label, ready = false;
@@ -47,6 +49,7 @@
       const sib = [...el.parentNode.children].filter((c) => c.tagName === el.tagName);
       parts.unshift(el.tagName.toLowerCase() + (sib.length > 1 ? `:nth-of-type(${sib.indexOf(el) + 1})` : ''));
       el = el.parentNode;
+      if (el && el.nodeType === 11 && el.host) { parts.unshift('::shadow'); el = el.host; }  // crossing a shadow root
     }
     return 'body > ' + parts.join(' > ');
   }
@@ -57,11 +60,30 @@
     for (const a of el.attributes) attrs[a.name] = a.value.slice(0, 200);
     return {
       selector: cssPath(el), tag: el.tagName.toLowerCase(), id: el.id || null,
-      text: (el.innerText || el.value || el.getAttribute('aria-label') || '').trim().slice(0, 200),
+      text: (el.innerText || el.value || el.getAttribute('aria-label') || el.alt || '').trim().slice(0, 200),
       attrs, html: el.outerHTML.slice(0, 500),
       bbox: { x: r.x, y: r.y, w: r.width, h: r.height },
       page: { url: location.href, title: document.title, viewport: { w: innerWidth, h: innerHeight }, scroll: { x: scrollX, y: scrollY } },
     };
+  }
+
+  // Light DOM plus every open shadow root (web components hide their buttons/links from document.querySelectorAll).
+  function allRoots() {
+    const roots = [document];
+    for (let i = 0; i < roots.length; i++) {
+      for (const el of roots[i].querySelectorAll('*')) if (el.shadowRoot) roots.push(el.shadowRoot);
+    }
+    return roots;
+  }
+
+  const hasOwnText = (el) => { for (const n of el.childNodes) if (n.nodeType === 3 && n.textContent.trim()) return true; return false; };
+
+  function visibleRect(el) {
+    const r = el.getBoundingClientRect();
+    if (r.width < 1 || r.height < 1 || r.bottom < 0 || r.right < 0 || r.top > innerHeight || r.left > innerWidth) return null;
+    const cs = getComputedStyle(el);
+    if (cs.visibility === 'hidden' || cs.display === 'none') return null;
+    return { r, cs };
   }
 
   function refresh() {
@@ -69,13 +91,24 @@
     if (now - state.boxesAt < 200) return;
     state.boxesAt = now;
     state.boxes = [];
-    for (const el of document.querySelectorAll(SELECTOR)) {
-      if (el.disabled || el.type === 'hidden') continue;
-      const r = el.getBoundingClientRect();
-      if (r.width < 1 || r.height < 1 || r.bottom < 0 || r.right < 0 || r.top > innerHeight || r.left > innerWidth) continue;
-      const cs = getComputedStyle(el);
-      if (cs.visibility === 'hidden' || cs.display === 'none') continue;
-      state.boxes.push({ el, r });
+    state.content = [];
+    for (const root of allRoots()) {
+      for (const el of root.querySelectorAll('*')) {
+        if (el === circle || el === hover || el === sel || el === label) continue;
+        if (el.matches(SELECTOR)) {
+          if (el.disabled || el.type === 'hidden') continue;
+          const v = visibleRect(el);
+          if (v) state.boxes.push({ el, r: v.r });
+        } else if (el.matches(CONTENT)) {
+          const v = visibleRect(el);
+          if (v) state.content.push({ el, r: v.r });
+        } else if (hasOwnText(el) && !/^(script|style|noscript|template|option)$/i.test(el.tagName) && !el.closest(SELECTOR)) {
+          const v = visibleRect(el);
+          if (!v) continue;
+          if (v.cs.cursor === 'pointer') state.boxes.push({ el, r: v.r });          // clickable div/span/custom element
+          else if (!v.cs.display.startsWith('inline')) state.content.push({ el, r: v.r }); // block text; inline spans belong to their paragraph
+        }
+      }
     }
   }
 
@@ -87,10 +120,20 @@
     for (const b of state.boxes) {
       const d = dist(b.r, x, y);
       if (b.el === state.cur) curD = d;
-      if (d < bestD) { bestD = d; best = b; }
+      // equal distance (e.g. circle inside nested elements): the smaller element is the more specific one
+      if (d < bestD || (d === bestD && best && b.r.width * b.r.height < best.r.width * best.r.height)) { bestD = d; best = b; }
     }
     if (!state.snap) { if (bestD > 0) best = null; }      // snapping off: only exact hits count
     else if (bestD > state.radius) best = null;
+    // Nothing interactive right under/next to the circle: fall back to the smallest text/media block under it.
+    if (!best || bestD > state.contentSnap) {
+      let c = null;
+      for (const b of state.content) {
+        if (dist(b.r, x, y) > 0) continue;
+        if (!c || b.r.width * b.r.height < c.r.width * c.r.height) c = b;
+      }
+      if (c) { best = c; bestD = 0; }
+    }
     return { best, bestD, curD };
   }
 
@@ -113,8 +156,9 @@
       circle.style.background = pinching ? 'rgba(0,170,0,.9)' : 'rgba(0,0,255,.85)';
 
       let { best, bestD, curD } = pick(x, y);
-      // hysteresis: keep the current element unless another is clearly closer
-      if (best && state.cur && best.el !== state.cur && curD <= state.radius && curD - bestD < state.hysteresis) {
+      // hysteresis: keep the current element unless another is clearly closer.
+      // Never applies when the circle is directly over another element (bestD === 0).
+      if (best && bestD > 0 && state.cur && best.el !== state.cur && curD <= state.radius && curD - bestD < state.hysteresis) {
         best = state.boxes.find((b) => b.el === state.cur);
       }
       const el = best ? best.el : null;

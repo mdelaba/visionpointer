@@ -42,7 +42,7 @@ Point at each red crosshair and press SPACE (keep your finger visible and steady
 ./web-pointer --hit-test   # scored test, results printed as VP_HIT lines
 ./web-pointer --url https://example.com
 ```
-Hold your hand in a hook posture (index finger curled near the thumb) and move your hand to move the circle. The nearest clickable element within 50 px gets a blue outline. Pinch to select it: it gets a sticky green highlight and is written to `~/.cache/visionpointer/selection.json`. Pinch empty space to clear. Press Esc in the browser to quit. On Hyprland the script asks for fullscreen itself, because pointing only maps correctly when the page fills the screen.
+Hold your hand in a hook posture (index finger curled near the thumb) and move your hand to move the circle. The nearest clickable element within 50 px gets a blue outline (this includes elements inside web components, and `div`/`span` buttons with a pointer cursor). If nothing clickable is close, the paragraph, heading, list item, table cell, image or caption directly under the circle gets the outline instead. Pinch to select it: it gets a sticky green highlight and is written to `~/.cache/visionpointer/selection.json`. Pinch empty space to clear. Press Esc in the browser to quit. On Hyprland the script asks for fullscreen itself, because pointing only maps correctly when the page fills the screen.
 
 Useful options: `--radius` (snap radius, px), `--dwell-ms` (also select after holding; 0 = off), `--smooth` / `--smooth-beta` (steadiness vs lag), `--confidence`, `--max-jump`, `--timeout` (default 300 s), `--debug-log file.csv` (per-frame positions and pinch ratio for tuning).
 
