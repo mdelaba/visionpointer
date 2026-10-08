@@ -10,6 +10,7 @@ VisionPointer lets you point at a web page with your hand in front of a webcam, 
 * Linux with a webcam (developed on Arch + Hyprland; the browser runs under Wayland/XWayland)
 * [uv](https://docs.astral.sh/uv/) and Python 3.11 (uv installs it if needed)
 * Optional: Claude Code (or any MCP-capable agent) to consume the selection
+* Optional, for voice: PipeWire (`pw-record` and `pw-play`) and a working microphone
 
 ### 1. Install
 ```bash
@@ -21,6 +22,11 @@ PLAYWRIGHT_BROWSERS_PATH=$PWD/.browsers .venv/bin/python -m playwright install c
 mkdir -p models
 curl -L -o models/hand_landmarker.task \
   https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/latest/hand_landmarker.task
+```
+For voice (`--voice`), also download the speech voice (the Whisper model downloads itself on first use):
+```bash
+mkdir -p models/piper
+.venv/bin/python -m piper.download_voices en_US-lessac-medium --download-dir models/piper
 ```
 `mediapipe` is pinned to 0.10.21 on purpose: 1.x crashed when creating the hand landmarker in testing.
 
@@ -44,7 +50,7 @@ Point at each red crosshair and press SPACE (keep your finger visible and steady
 ```
 Hold your hand with the index finger curled near the thumb and move your hand to move the circle. The circle sits on your thumb tip, which stays put while the index finger closes on it, so it does not jump when you pinch (calibrate with your thumb tip too). The nearest clickable element within 50 px gets a blue outline (this includes elements inside web components, and `div`/`span` buttons with a pointer cursor). If nothing clickable is close, the paragraph, heading, list item, table cell, image or caption directly under the circle gets the outline instead. Pinch and release to select it: it gets a sticky green highlight and is written to `~/.cache/visionpointer/selection.json`. Pinch and release on empty space to clear. To scroll, pinch and drag your hand up or down: once you move past a small threshold the circle turns orange and the page follows your hand like a touchscreen (hand up scrolls down). A scroll does not change the selection. To click, pinch and hold still for 0.6 s: the circle turns purple and a real mouse click is sent to the element. To go back or forward, pinch and drag your hand sideways (right = back, left = forward, like swiping a touchscreen). Press Esc in the browser to quit. On Hyprland the script asks for fullscreen itself, because pointing only maps correctly when the page fills the screen.
 
-Useful options: `--radius` (snap radius, px), `--dwell-ms` (also select after holding; 0 = off), `--smooth` / `--smooth-beta` (steadiness vs lag), `--scroll-threshold` (px of movement before a pinch becomes a scroll, default 40), `--scroll-gain` (scroll distance per px of hand movement, default 1.5), `--swipe-threshold` (px of sideways movement for back/forward, default 250, 0 = off), `--click-hold` (seconds to hold a pinch still to click, default 0.6, 0 = off), `--confidence`, `--max-jump`, `--timeout` (default 300 s), `--debug-log file.csv` (per-frame positions and pinch ratio for tuning).
+Useful options: `--radius` (snap radius, px), `--dwell-ms` (also select after holding; 0 = off), `--smooth` / `--smooth-beta` (steadiness vs lag), `--scroll-threshold` (px of movement before a pinch becomes a scroll, default 40), `--scroll-gain` (scroll distance per px of hand movement, default 1.2), `--swipe-threshold` (px of sideways movement for back/forward, default 250, 0 = off), `--click-hold` (seconds to hold a pinch still to click, default 0.6, 0 = off), `--confidence` (hand detection threshold, default 0.8), `--max-jump`, `--timeout` (default 300 s), `--debug-log file.csv` (per-frame positions and pinch ratio for tuning).
 
 (`./test`, `./calibrate` and `./web-pointer` are launchers for the scripts in `src/`; all flags pass through.)
 
@@ -54,10 +60,14 @@ claude mcp add visionpointer -- "$PWD/.venv/bin/python" "$PWD/src/mcp_server.py"
 ```
 While `web_pointer.py` is running, select an element by pinching and ask the agent about "this". It calls `get_selected_element` (and `get_selection_history`) to see the selector, text, attributes, HTML snippet, bounding box, page URL/title, and how long ago it was selected. For other agents, register `src/mcp_server.py` as a stdio MCP server, or read the JSON state files directly. Set `VP_STATE_DIR` to change where they are stored.
 
+**Screenshots (opt-in).** Start with `--screenshots` and each selection also saves a screenshot, so the agent can look at the page when a question needs it ("what does this picture show?", "where is that button?"). The agent asks for it through a separate MCP tool, `get_selection_screenshot(view)`, so text-only questions never pay for an image. Views: `annotated` (the visible page with a red box around the selected element and a crosshair where you pointed), `crop` (the element with a small margin) and `clean` (no marks). The result also gives the element box and pointer position in image pixels and as 0 to 1 fractions, the viewport size and the device pixel ratio. Images are scaled to at most 1568 px on the long side.
+
+Privacy: screenshots can contain anything on the page, such as email or banking, and are sent to Anthropic when the agent looks at one. That is why this is off by default. They are saved in `~/.cache/visionpointer/screenshots/` (three PNGs per selection, named by timestamp: `_annotated`, `_crop`, `_clean`), only the last 5 selections are kept, and they are deleted when the selection is cleared or the program exits.
+
 ### Troubleshooting
 * **Circle only reaches part of the screen:** the browser isn't fullscreen. Make the window fullscreen.
 * **"No calibration for this screen size and camera resolution":** run step 3 again.
-* **Jittery pointer or jumps:** check lighting (the camera drops its frame rate in dim light), raise `--confidence`, or lower `--smooth`.
+* **Jittery pointer or jumps:** check lighting (the camera drops its frame rate in dim light), raise `--confidence` (hand detection threshold, default 0.8), or lower `--smooth`.
 * **Camera not found:** try `--camera 1` (or check `ls /dev/video*`).
 
 ---
@@ -247,9 +257,26 @@ Build and support purpose-made hardware that lets people work with AI without a 
 
 ## 8. Future Work: Hands-Free Voice Commands
 
-VisionPointer only handles the pointing half of "voice + pointing". This section records the plan for the voice half. It is likely a separate companion project rather than part of this one, and nothing here is built yet.
+VisionPointer only handles the pointing half of "voice + pointing". This section records the plan for the voice half. A first version is now built into `web-pointer` (see "What is built"); the wake word and tmux options below are still plans.
 
-### What exists today
+### What is built
+`web-pointer --voice` talks to Claude about what you are pointing at, with no keyboard and no terminal:
+
+```
+mic (PipeWire default) -> only while a hand is visible -> record until 0.8 s of silence -> faster-whisper (local)
+  -> claude -p --resume <stored session> (reads the pointed-at element via the visionpointer MCP) -> Piper (local) -> speakers
+```
+
+* Noise handling: the strictest voice-activity setting, 8 of the last 10 frames must be speech to start, an utterance needs about 0.45 s of speech, Whisper's own Silero filter drops non-speech, and low-confidence or repetitive transcripts are discarded. A rule that required speech to be louder than the room noise was tried and removed because it also blocked quiet speech. If your microphone volume is very low, raise it with `wpctl set-volume @DEFAULT_AUDIO_SOURCE@ 0.6`.
+* Listens only while a hand is detected (1 s grace); the microphone process is closed when no hand is in view and while Claude thinks and speaks, so it never hears its own voice.
+* Only text goes to Claude. Audio is transcribed and spoken on this machine.
+* Context carries over: the session id is stored in `~/.cache/visionpointer/voice/session_id` and resumed on each question. Say "new conversation" (or "start over") to reset it.
+* Claude is limited to the read-only visionpointer tools (including the opt-in screenshot tool, see Section 4 step 5), and the call loads only the visionpointer MCP server (your other MCP servers would add seconds per question). Each `claude -p` call has a 90 s timeout.
+* Models: `models/whisper` (base.en, about 140 MB, downloaded on first use) and `models/piper` (about 60 MB, see install). The status and last exchange show at the bottom of the page.
+* Options: `--voice`, `--voice-model` (default `haiku` for speed; try `sonnet` for deeper answers), `--voice-silence` (seconds of silence that end a question).
+* If it feels slow: shorten `--voice-silence`. Startup of `claude -p` is the main delay (about 4 s before the first sentence in testing); the model itself takes under 2 s with haiku. A long-lived Claude process would remove the startup cost.
+
+### What existed before
 * Claude Code's `/voice` is cloud speech-to-text: audio is streamed to Anthropic's servers and needs a claude.ai sign-in. Only the microphone capture is local.
 * It needs a keypress to start, so there is no wake word and it is not hands-free.
 * Dictation can auto-send without pressing Enter: `/voice tap` (tap to start, tap to send), or `"autoSubmit": true` in the `voice` settings object for hold mode. Both only submit transcripts of three words or more.
@@ -295,7 +322,9 @@ Everything still to build, roughly in priority order. "Done" items are listed so
 * Snapping to interactive elements, with hysteresis; selection of text and media blocks; open shadow DOM; `div`/`span` buttons with a pointer cursor.
 * Pinch-to-select, pinch-and-drag to scroll, pinch-and-hold to click, and pinch-and-swipe sideways for back/forward.
 * The pointer circle follows the thumb tip, so it does not jump when you pinch. Pinch thresholds are 0.18 to close and 0.23 to open.
-* MCP server with `get_selected_element` and `get_selection_history`.
+* Voice (`--voice`): hands-free questions about the pointed-at element, spoken answers, local speech models, resumed Claude session.
+* MCP server with `get_selected_element`, `get_selection_history` and `get_selection_screenshot`.
+* Screenshots (`--screenshots`, opt-in): annotated page, element crop and clean page saved with each selection and fetched by the agent only when a question needs to see the page.
 
 ### Next
 1. **Work in the user's own browser.** Today the pointer only works in the Playwright kiosk window. Options: a browser extension (content script plus a local connection to the hand tracker), or the browser's accessibility tree.

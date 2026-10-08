@@ -8,16 +8,19 @@
   // dwellMs 0 = dwell selection off (pinch is the main trigger)
   const state = { radius: 50, contentSnap: 12, content: [], snap: true, dwellMs: 0, hysteresis: 20, cur: null, since: 0, fired: false, boxes: [], boxesAt: -Infinity, selected: null };
 
-  const mk = (css) => { const d = document.createElement('div'); d.style.cssText = 'position:fixed;pointer-events:none;z-index:2147483647;display:none;box-sizing:border-box;' + css; document.documentElement.appendChild(d); return d; };
-  let circle, hover, sel, label, ready = false;
+  const mk = (css) => { const d = document.createElement('div'); d.className = 'vp-ui'; d.style.cssText = 'position:fixed;pointer-events:none;z-index:2147483647;display:none;box-sizing:border-box;' + css; document.documentElement.appendChild(d); return d; };
+  let circle, hover, sel, label, banner, ready = false;
   function init() {
     if (ready || !document.documentElement) return;
     ready = true;
+    // lets web_pointer hide every overlay while it takes a screenshot
+    const st = document.createElement('style'); st.textContent = '[data-vp-hide] .vp-ui { visibility: hidden !important; }'; document.documentElement.appendChild(st);
     circle = mk('width:40px;height:40px;margin:-20px 0 0 -20px;border-radius:50%;background:rgba(0,0,255,.85);');
     hover = mk('border:3px solid #00f;border-radius:4px;');
     sel = mk('border:4px solid #0a0;border-radius:4px;background:rgba(0,170,0,.15);');
     label = mk('background:#0a0;color:#fff;font:12px sans-serif;padding:2px 6px;border-radius:3px;');
     label.textContent = 'selected';
+    banner = mk('left:50%;bottom:16px;transform:translateX(-50%);max-width:70vw;background:rgba(20,20,20,.85);color:#fff;font:14px sans-serif;padding:6px 12px;border-radius:6px;white-space:pre-wrap;');
     requestAnimationFrame(drawSelected);
   }
 
@@ -60,7 +63,7 @@
     for (const a of el.attributes) attrs[a.name] = a.value.slice(0, 200);
     return {
       selector: cssPath(el), tag: el.tagName.toLowerCase(), id: el.id || null,
-      text: (el.innerText || el.value || el.getAttribute('aria-label') || el.alt || '').trim().slice(0, 200),
+      text: (el.innerText || el.value || el.getAttribute('aria-label') || el.alt || '').trim().slice(0, 20000),
       attrs, html: el.outerHTML.slice(0, 500),
       bbox: { x: r.x, y: r.y, w: r.width, h: r.height },
       page: { url: location.href, title: document.title, viewport: { w: innerWidth, h: innerHeight }, scroll: { x: scrollX, y: scrollY } },
@@ -94,7 +97,7 @@
     state.content = [];
     for (const root of allRoots()) {
       for (const el of root.querySelectorAll('*')) {
-        if (el === circle || el === hover || el === sel || el === label) continue;
+        if (el === circle || el === hover || el === sel || el === label || el === banner) continue;
         if (el.matches(SELECTOR)) {
           if (el.disabled || el.type === 'hidden') continue;
           const v = visibleRect(el);
@@ -178,6 +181,18 @@
       if (!best) return null;
       const r = best.el.getBoundingClientRect();
       return [r.left + r.width / 2, r.top + r.height / 2];
+    },
+    // Voice status line (listening / thinking / speaking) with the latest exchange underneath.
+    setStatus(status, caption) {
+      init();
+      banner.textContent = status + (caption ? '\n' + caption : '');
+      banner.style.display = status ? 'block' : 'none';
+    },
+    // Selected element's rectangle in viewport px (for screenshots), or null.
+    selectedRect() {
+      if (!state.selected || !state.selected.isConnected) return null;
+      const r = state.selected.getBoundingClientRect();
+      return [r.left, r.top, r.right, r.bottom];
     },
     clear() {
       if (state.selected) { state.selected = null; console.log('VP_CLEAR'); }

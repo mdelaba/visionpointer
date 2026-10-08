@@ -6,12 +6,14 @@ Override the directory with the VP_STATE_DIR environment variable.
 """
 import json
 import os
+import shutil
 import time
 from pathlib import Path
 
 STATE_DIR = Path(os.environ.get("VP_STATE_DIR", "~/.cache/visionpointer")).expanduser()
 SELECTION_FILE = STATE_DIR / "selection.json"
 HISTORY_FILE = STATE_DIR / "history.jsonl"
+SCREENSHOT_DIR = STATE_DIR / "screenshots"  # only written with web_pointer --screenshots
 
 
 def _write_atomic(path: Path, text: str) -> None:
@@ -28,7 +30,33 @@ def write_selection(element: dict) -> None:
         f.write(json.dumps(selection) + "\n")
 
 
+def attach_screenshot(selected_at: float, shot: dict) -> bool:
+    """Add screenshot info to the selection made at selected_at (current file and its history line)."""
+    try:
+        data = json.loads(SELECTION_FILE.read_text())
+        sel = data.get("selection")
+    except (OSError, ValueError):
+        return False
+    if not sel or sel.get("selected_at") != selected_at:
+        return False  # the selection changed while the screenshot was being taken
+    sel["screenshot"] = shot
+    _write_atomic(SELECTION_FILE, json.dumps({"selection": sel}))
+    try:
+        lines = HISTORY_FILE.read_text().splitlines()
+        if lines and json.loads(lines[-1]).get("selected_at") == selected_at:
+            lines[-1] = json.dumps(sel)
+            _write_atomic(HISTORY_FILE, "\n".join(lines) + "\n")
+    except (OSError, ValueError):
+        pass
+    return True
+
+
+def clear_screenshots() -> None:
+    shutil.rmtree(SCREENSHOT_DIR, ignore_errors=True)
+
+
 def clear_selection() -> None:
+    clear_screenshots()  # screenshots can show private page content: do not keep them once the selection is gone
     _write_atomic(SELECTION_FILE, json.dumps({"selection": None, "cleared_at": time.time()}))
 
 

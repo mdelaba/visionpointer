@@ -8,3 +8,6 @@ PyQt6
 screeninfo
 playwright
 mcp>=2
+faster-whisper
+webrtcvad-wheels
+piper-tts

@@ -133,6 +133,75 @@ class PinchGesture:
         return actions
 
 
+SHOT_MAX = 1568  # longest side sent to Claude, in px
+SHOTS_KEPT = 5
+
+
+def capture_selection(page, point):
+    """Screenshot the page with the selected element boxed and the pointed spot marked.
+
+    point is where the user pointed, as screen fractions. Returns the screenshot record that
+    selection_store.attach_screenshot stores (file paths plus the element box and pointer position in
+    image pixels and as 0-1 fractions), or None when nothing is selected.
+    """
+    sel = selection_store.read_selection()
+    info = page.evaluate("() => { const r = window.__vp.selectedRect(); return r && { r, vw: innerWidth, vh: innerHeight }; }")
+    if not sel or not info:
+        return None, None
+    page.evaluate("document.documentElement.setAttribute('data-vp-hide', '1')")  # no circle/highlight in the picture
+    try:
+        png = page.screenshot(type="png", timeout=5000)
+    finally:
+        page.evaluate("document.documentElement.removeAttribute('data-vp-hide')")
+    img = cv2.imdecode(np.frombuffer(png, np.uint8), cv2.IMREAD_COLOR)
+    h, w = img.shape[:2]
+    vw, vh = info["vw"], info["vh"]
+    sx, sy = w / vw, h / vh
+    x0, y0, x1, y1 = info["r"]
+    box = [x0 * sx, y0 * sy, x1 * sx, y1 * sy]
+    clipped = [max(box[0], 0), max(box[1], 0), min(box[2], w), min(box[3], h)]
+    partial = clipped != box
+    pointer = [point[0] * w, point[1] * h]
+
+    def shrink(image):
+        k = min(1.0, SHOT_MAX / max(image.shape[:2]))
+        return (cv2.resize(image, None, fx=k, fy=k, interpolation=cv2.INTER_AREA) if k < 1 else image), k
+
+    clean, k = shrink(img)
+    annotated = clean.copy()
+    b = [int(v * k) for v in clipped]
+    px_, py_ = int(pointer[0] * k), int(pointer[1] * k)
+    cv2.rectangle(annotated, (b[0], b[1]), (b[2], b[3]), (0, 0, 255), 3)
+    cv2.drawMarker(annotated, (px_, py_), (0, 0, 255), cv2.MARKER_CROSS, 28, 3)
+    margin = int(24 * k)
+    crop = clean[max(b[1] - margin, 0):min(b[3] + margin, clean.shape[0]), max(b[0] - margin, 0):min(b[2] + margin, clean.shape[1])]
+    if crop.size == 0:
+        crop = clean
+
+    out = selection_store.SCREENSHOT_DIR
+    out.mkdir(parents=True, exist_ok=True)
+    stamp = f"{int(time.time() * 1000)}"
+    paths = {}
+    for name, image in (("annotated", annotated), ("crop", crop), ("clean", clean)):
+        paths[name] = str(out / f"{stamp}_{name}.png")
+        cv2.imwrite(paths[name], image)
+    for old in sorted(out.glob("*_annotated.png"))[:-SHOTS_KEPT]:  # keep only the last few selections on disk
+        for f in out.glob(old.name.split("_")[0] + "_*.png"):
+            f.unlink(missing_ok=True)
+    H, W = clean.shape[:2]
+    return {
+        **paths,
+        "image_size": [W, H],
+        "element_box": [round(v) for v in b],
+        "element_box_norm": [round(b[0] / W, 3), round(b[1] / H, 3), round(b[2] / W, 3), round(b[3] / H, 3)],
+        "element_partly_offscreen": partial,
+        "pointer": [px_, py_],
+        "pointer_norm": [round(px_ / W, 3), round(py_ / H, 3)],
+        "viewport": [vw, vh],
+        "device_pixel_ratio": round(sx, 3),
+    }, sel["selected_at"]
+
+
 def ensure_fullscreen(page, sw, sh, wait=5.0):
     """Pointer mapping assumes the page fills the screen; on Hyprland, ask for fullscreen."""
     def size():
@@ -159,14 +228,18 @@ def main() -> int:
     parser.add_argument("--pinch-open", type=float, default=0.23, help="ratio above which the pinch is released")
     parser.add_argument("--pinch-lookback", type=float, default=0.25, help="seconds: select where you pointed this long ago (the pinch moves the fingertip)")
     parser.add_argument("--smooth", type=float, default=0.45, help="base cutoff Hz: lower = steadier but laggier")
-    parser.add_argument("--confidence", type=float, default=0.7, help="MediaPipe hand detection/presence/tracking threshold")
+    parser.add_argument("--confidence", type=float, default=0.8, help="MediaPipe hand detection/presence/tracking threshold")
     parser.add_argument("--debug-log", type=Path, help="write per-frame CSV (raw camera, mapped, filtered positions)")
     parser.add_argument("--max-jump", type=float, default=300, help="ignore single-frame jumps larger than this many screen px")
     parser.add_argument("--smooth-beta", type=float, default=0.01, help="speed term: higher = less lag when moving fast")
     parser.add_argument("--scroll-threshold", type=float, default=40, help="screen px of vertical movement while pinched before it becomes a scroll")
-    parser.add_argument("--scroll-gain", type=float, default=1.5, help="scroll distance per px of hand movement")
+    parser.add_argument("--scroll-gain", type=float, default=1.2, help="scroll distance per px of hand movement")
     parser.add_argument("--swipe-threshold", type=float, default=250, help="screen px of horizontal movement while pinched that triggers back/forward (0 = off)")
     parser.add_argument("--click-hold", type=float, default=0.6, help="seconds to hold a pinch still to click (0 = off)")
+    parser.add_argument("--voice", action="store_true", help="talk to Claude about what you point at (listens only while a hand is visible)")
+    parser.add_argument("--voice-model", default="haiku", help="Claude model for voice answers (haiku is fastest; e.g. sonnet for deeper answers)")
+    parser.add_argument("--voice-silence", type=float, default=0.8, help="seconds of silence that end your question")
+    parser.add_argument("--screenshots", action="store_true", help="save a screenshot with each selection so Claude can look at it when a question needs it (off by default: screenshots can contain private page content)")
     parser.add_argument("--hit-test", action="store_true", help="run the test page's scored hit test")
     args = parser.parse_args()
 
@@ -212,7 +285,7 @@ def main() -> int:
         except (OSError, ValueError) as e:
             print(f"Could not save selection: {e}", file=sys.stderr)
 
-    selection_store.clear_selection()  # a previous session's selection is no longer highlighted
+    selection_store.clear_selection()  # also deletes old screenshots; a previous session's selection is no longer highlighted
 
     t0 = time.monotonic()
     deadline = t0 + args.timeout
@@ -232,6 +305,24 @@ def main() -> int:
                 {"radius": args.radius, "snap": not args.no_snap, "dwellMs": args.dwell_ms},
             )
 
+            voice = None
+            if args.voice:
+                from voice import VoiceAssistant
+
+                voice = VoiceAssistant(args.voice_model, args.voice_silence)
+                voice.start()
+            shown_status = None
+
+            def shoot(point):
+                if not args.screenshots:
+                    return
+                try:
+                    shot, selected_at = capture_selection(page, point)
+                    if shot:
+                        selection_store.attach_screenshot(selected_at, shot)
+                except Exception as e:  # a failed screenshot must never break pointing
+                    print(f"Screenshot failed: {e}", file=sys.stderr)
+
             smoother = OneEuroFilter(args.smooth, args.smooth_beta)
             spikes = SpikeRejector(args.max_jump)
             pinch = PinchTracker(args.pinch_close, args.pinch_open)
@@ -242,6 +333,12 @@ def main() -> int:
                 log.write("t,detected,cam_x,cam_y,mapped_x,mapped_y,filt_x,filt_y,pinch\n")
             while time.monotonic() < deadline and not quit_flag and not page.is_closed():
                 pt, ratio = read_hand(landmarker, cap, t0, cam_size)
+                if voice:
+                    if pt is not None:
+                        voice.hand_seen()
+                    if (voice.status, voice.caption) != shown_status:
+                        shown_status = (voice.status, voice.caption)
+                        page.evaluate("([s, c]) => window.__vp.setStatus(s, c)", list(shown_status))
                 if pt is None:
                     if log:
                         log.write(f"{time.monotonic() - t0:.3f},0,,,,,,,\n")
@@ -273,9 +370,11 @@ def main() -> int:
                 for action, value in gesture.step(confirmed, pinch.closed, smoothed, (px, py), now):
                     if action == "select":
                         page.evaluate("([fx, fy]) => window.__vp.selectAt(fx * innerWidth, fy * innerHeight)", list(value))
+                        shoot(value)
                     elif action == "click":
                         # select (sticky highlight) then send a real mouse click at the element's centre
                         c = page.evaluate("([fx, fy]) => window.__vp.selectAt(fx * innerWidth, fy * innerHeight)", list(value))
+                        shoot(value)  # before the click: it may navigate away
                         if c:
                             page.mouse.click(c[0], c[1])
                     elif action in ("back", "forward"):
@@ -285,6 +384,8 @@ def main() -> int:
                         page.mouse.move(float(value[0]), float(value[1]))  # wheel events go to what is under the mouse
                     elif action == "scroll":
                         page.mouse.wheel(0, float(value))
+            if voice:
+                voice.stop()
             browser.close()
     except Exception as e:  # camera/browser failures should end cleanly, not hang
         if "has been closed" in str(e):  # the window was closed (Esc/quit) mid-frame: a normal exit
@@ -294,6 +395,7 @@ def main() -> int:
     finally:
         if log:
             log.close()
+        selection_store.clear_screenshots()  # they can show private page content
         cap.release()
         landmarker.close()
     return 0
