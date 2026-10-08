@@ -42,9 +42,9 @@ Point at each red crosshair and press SPACE (keep your finger visible and steady
 ./web-pointer --hit-test   # scored test, results printed as VP_HIT lines
 ./web-pointer --url https://example.com
 ```
-Hold your hand in a hook posture (index finger curled near the thumb) and move your hand to move the circle. The nearest clickable element within 50 px gets a blue outline (this includes elements inside web components, and `div`/`span` buttons with a pointer cursor). If nothing clickable is close, the paragraph, heading, list item, table cell, image or caption directly under the circle gets the outline instead. Pinch and release to select it: it gets a sticky green highlight and is written to `~/.cache/visionpointer/selection.json`. Pinch and release on empty space to clear. To scroll, pinch and drag your hand up or down: once you move past a small threshold the circle turns orange and the page follows your hand like a touchscreen (hand up scrolls down). A scroll does not change the selection. Press Esc in the browser to quit. On Hyprland the script asks for fullscreen itself, because pointing only maps correctly when the page fills the screen.
+Hold your hand in a hook posture (index finger curled near the thumb) and move your hand to move the circle. The nearest clickable element within 50 px gets a blue outline (this includes elements inside web components, and `div`/`span` buttons with a pointer cursor). If nothing clickable is close, the paragraph, heading, list item, table cell, image or caption directly under the circle gets the outline instead. Pinch and release to select it: it gets a sticky green highlight and is written to `~/.cache/visionpointer/selection.json`. Pinch and release on empty space to clear. To click, pinch and hold still for 0.6 s: the circle turns purple and a real mouse click is sent to the centre of the element under it (the element is also selected). To scroll, pinch and drag your hand up or down: once you move past a small threshold the circle turns orange and the page follows your hand like a touchscreen (hand up scrolls down). A scroll does not change the selection. Press Esc in the browser to quit. On Hyprland the script asks for fullscreen itself, because pointing only maps correctly when the page fills the screen.
 
-Useful options: `--radius` (snap radius, px), `--dwell-ms` (also select after holding; 0 = off), `--smooth` / `--smooth-beta` (steadiness vs lag), `--scroll-threshold` (px of movement before a pinch becomes a scroll, default 40), `--scroll-gain` (scroll distance per px of hand movement, default 1.5), `--confidence`, `--max-jump`, `--timeout` (default 300 s), `--debug-log file.csv` (per-frame positions and pinch ratio for tuning).
+Useful options: `--radius` (snap radius, px), `--dwell-ms` (also select after holding; 0 = off), `--smooth` / `--smooth-beta` (steadiness vs lag), `--scroll-threshold` (px of movement before a pinch becomes a scroll, default 40), `--scroll-gain` (scroll distance per px of hand movement, default 1.5), `--click-hold` (seconds to hold a pinch to click, default 0.6; 0 turns clicking off), `--confidence`, `--max-jump`, `--timeout` (default 300 s), `--debug-log file.csv` (per-frame positions and pinch ratio for tuning).
 
 (`./test`, `./calibrate` and `./web-pointer` are launchers for the scripts in `src/`; all flags pass through.)
 
@@ -59,6 +59,19 @@ While `web_pointer.py` is running, select an element by pinching and ask the age
 * **"No calibration for this screen size and camera resolution":** run step 3 again.
 * **Jittery pointer or jumps:** check lighting (the camera drops its frame rate in dim light), raise `--confidence`, or lower `--smooth`.
 * **Camera not found:** try `--camera 1` (or check `ls /dev/video*`).
+
+---
+
+## Use Cases
+
+The same pointing, selecting, clicking and scrolling gestures serve several kinds of users. All of the following work in the demo today, inside the VisionPointer browser window.
+
+* **Pointing at things for an AI agent (developers and general users).** Point at a button, paragraph, image or error message, pinch to select it, and ask an agent "what does this do?" or "fix this". The agent receives the selector, text, attributes, HTML, position and page URL through MCP, so there is no screenshotting or describing the element in words.
+* **Hands-free web navigation (accessibility).** For people who cannot comfortably use a mouse or keyboard: move the circle with your hand, snap onto links and buttons, pinch and hold to click, pinch and drag to scroll. Snapping to the nearest target makes small, shaky hand movements usable.
+* **Presenting and demonstrating (meetings and demos).** Drive a web-based slide deck or demo from a screen without a mouse: point at an item to highlight it, click through, and scroll, with the audience seeing the circle and the highlighted element.
+* **Web development and QA.** Use the selector and bounding box of a pinched element to tell an agent exactly which part of a page a bug report or change request is about.
+
+Not covered yet: native (non-browser) apps, your everyday browser, pointing from across a room, and voice. See Section 9 for the build work.
 
 ---
 
@@ -270,3 +283,38 @@ The sender should be a pluggable command, with tmux as the default.
 * **Permission prompts stall a hands-free session.** Allow-list `mcp__visionpointer__*` in the agent's settings; other tools need voice approval or an allow-list.
 * **Echo:** TTS replies can trigger the wake word, so pause listening while speaking.
 * **Interim option:** `/voice tap` with `autoSubmit` is the cheapest stopgap if a keypress is acceptable. It could be bound to a foot pedal or a button on the pointer hardware from Section 7.
+
+---
+
+## 9. Build Work
+
+Everything still to build, roughly in priority order. "Done" items are listed so the history is in one place.
+
+### Done
+* Hand tracking, 4-point calibration, smoothing and spike rejection.
+* Snapping to interactive elements, with hysteresis; selection of text and media blocks; open shadow DOM; `div`/`span` buttons with a pointer cursor.
+* Pinch-to-select, pinch-and-hold to click, pinch-and-drag to scroll.
+* MCP server with `get_selected_element` and `get_selection_history`.
+
+### Next
+1. **Work in the user's own browser.** Today the pointer only works in the Playwright kiosk window. Options: a browser extension (content script plus a local connection to the hand tracker), or the browser's accessibility tree.
+2. **Native apps.** Use the OS accessibility tree (AT-SPI on Linux, UI Automation on Windows, AX on macOS) to snap to and describe elements outside the browser.
+3. **Iframes.** Cross-origin iframes are invisible to the injected script; selection and clicking inside them do not work yet.
+4. **Text-range selection.** Select a sentence or a span of words, not just a whole paragraph.
+5. **Selection across page navigation.** Keep or clear the selection sensibly after a click changes the page.
+6. **Back/forward and tab switching gestures.** A horizontal pinch-drag for back/forward was built and removed for now; tab switching was never started.
+7. **Pointing from a distance.** Presenters stand away from the screen, so the camera-to-screen mapping needs a different approach (a wider camera view, or pointing direction instead of fingertip position).
+8. **Touchscreen input source** alongside the webcam, using the same selection and MCP layer.
+9. **Hands-free voice** (Section 8), including a wake word and sending the request to the agent.
+10. **Page-scan throttling.** The element scan runs every 200 ms; throttle it if very long pages stutter.
+11. **Packaging and public launch** (demo video, install instructions, licence; see Milestone 4).
+12. **Dedicated pointing hardware** (Section 7).
+
+### Future: Circle to Search
+Similar to Google's Circle to Search: the user draws a loop around any part of the screen (text, an image, a chart, a region of an app) and the content inside it goes to an agent.
+
+* **Gesture:** needs its own mode, because pinch-and-drag already scrolls. Candidates: a voice command ("circle"), a different pinch (middle finger and thumb), or a toggle with a held gesture. The circle turns a distinct colour while drawing, and a trail shows the path.
+* **Capture:** take the bounding box of the path (or the path itself as a mask), then collect (a) a cropped screenshot of that region, (b) the DOM elements and text that fall inside it, and (c) the page URL and title.
+* **Hand-off:** extend the MCP server with a `get_circled_region` tool returning the screenshot, text and elements, plus an entry in the selection history. The agent then answers questions about "this part" without the user describing it.
+* **Beyond the browser:** with the native-app work above, the same gesture can capture any screen region through a screenshot. Searching the web for the circled content is just one thing an agent can do with it.
+* **Open questions:** how to tell a deliberate loop from a normal hand movement (closure and size thresholds), and how to handle regions that cross iframes.
