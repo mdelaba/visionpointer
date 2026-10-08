@@ -208,6 +208,9 @@ PREVIEW_W = 320
 
 def show_preview(seen, tip, closed):
     """Small mirrored webcam window: white dot on the index tip, circle on the thumb tip (green while pinched)."""
+    if not getattr(show_preview, "made", False):  # GUI_NORMAL: no Qt toolbar (zoom/save/properties buttons) or status bar
+        cv2.namedWindow(PREVIEW_WINDOW, cv2.WINDOW_GUI_NORMAL | cv2.WINDOW_AUTOSIZE)
+        show_preview.made = True
     frame = cv2.flip(seen["frame"], 1)
     h, w = frame.shape[:2]
     if tip is not None:
