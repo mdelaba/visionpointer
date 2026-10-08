@@ -153,7 +153,7 @@
       refresh();
       circle.style.display = 'block';
       circle.style.left = x + 'px'; circle.style.top = y + 'px';
-      circle.style.background = pinching ? 'rgba(0,170,0,.9)' : 'rgba(0,0,255,.85)';
+      circle.style.background = pinching === 'scroll' ? 'rgba(255,140,0,.9)' : pinching ? 'rgba(0,170,0,.9)' : 'rgba(0,0,255,.85)';
 
       let { best, bestD, curD } = pick(x, y);
       // hysteresis: keep the current element unless another is clearly closer.

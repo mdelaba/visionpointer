@@ -1,7 +1,8 @@
 """Point at web elements: fullscreen Chromium + calibrated fingertip + snapping + pinch select.
 
-Run calibrate_pointer.py first (it writes calibration.json). Pinch (thumb to index) selects the
-element you point at and keeps it highlighted; pinch empty space to clear. Selections are printed
+Run calibrate_pointer.py first (it writes calibration.json). Pinch (thumb to index) and release to
+select the element you point at and keep it highlighted; pinch empty space to clear. Pinch and drag
+vertically to scroll instead (the circle turns orange). Selections are printed
 as `VP_SELECT {json}` lines and written to the state dir (see selection_store.py). Press Esc in the browser to quit; exits after --timeout seconds.
 """
 import argparse
@@ -84,6 +85,42 @@ class OneEuroFilter:
         return self.x
 
 
+class PinchGesture:
+    """Turns pinch frames into actions: pinch+release selects, pinch+vertical drag scrolls.
+
+    step() returns a list of ("select", target) on release, or ("scroll_start", pos) then
+    ("scroll", wheel_delta) while dragging. Scrolling follows the hand like a touchscreen:
+    hand up -> content up (wheel delta positive).
+    """
+
+    def __init__(self, threshold, gain):
+        self.threshold, self.gain = threshold, gain
+        self.reset()
+
+    def reset(self):
+        self.active = self.scrolling = False
+        self.target, self.start_y, self.last_y = None, 0.0, 0.0
+
+    def step(self, confirmed, closed, pos, target):
+        actions = []
+        if confirmed:
+            self.active, self.scrolling, self.target = True, False, target
+            self.start_y = self.last_y = pos[1]
+        elif self.active:
+            if closed:
+                if not self.scrolling and abs(pos[1] - self.start_y) > self.threshold:
+                    self.scrolling = True
+                    actions.append(("scroll_start", pos))
+                if self.scrolling:
+                    actions.append(("scroll", -(pos[1] - self.last_y) * self.gain))
+                    self.last_y = pos[1]
+            else:
+                if not self.scrolling:
+                    actions.append(("select", self.target))
+                self.active = False
+        return actions
+
+
 def ensure_fullscreen(page, sw, sh, wait=5.0):
     """Pointer mapping assumes the page fills the screen; on Hyprland, ask for fullscreen."""
     def size():
@@ -114,6 +151,8 @@ def main() -> int:
     parser.add_argument("--debug-log", type=Path, help="write per-frame CSV (raw camera, mapped, filtered positions)")
     parser.add_argument("--max-jump", type=float, default=300, help="ignore single-frame jumps larger than this many screen px")
     parser.add_argument("--smooth-beta", type=float, default=0.01, help="speed term: higher = less lag when moving fast")
+    parser.add_argument("--scroll-threshold", type=float, default=40, help="screen px of vertical movement while pinched before it becomes a scroll")
+    parser.add_argument("--scroll-gain", type=float, default=1.5, help="scroll distance per px of hand movement")
     parser.add_argument("--hit-test", action="store_true", help="run the test page's scored hit test")
     args = parser.parse_args()
 
@@ -182,6 +221,7 @@ def main() -> int:
             smoother = OneEuroFilter(args.smooth, args.smooth_beta)
             spikes = SpikeRejector(args.max_jump)
             pinch = PinchTracker(args.pinch_close, args.pinch_open)
+            gesture = PinchGesture(args.scroll_threshold, args.scroll_gain)
             history = collections.deque()  # (time, fx, fy) smoothed screen fractions
             if args.debug_log:
                 log = open(args.debug_log, "w")
@@ -194,6 +234,7 @@ def main() -> int:
                     smoother.reset()
                     spikes.reset()
                     pinch.reset()
+                    gesture.reset()
                     history.clear()
                     page.evaluate("window.__vp.update(null, null)")
                     continue
@@ -210,12 +251,18 @@ def main() -> int:
                 # scale by the live viewport so resizing/fullscreen mid-run stays correct
                 page.evaluate(
                     "([fx, fy, p]) => window.__vp.update(fx * innerWidth, fy * innerHeight, p)",
-                    [fx, fy, pinch.closed],
+                    [fx, fy, "scroll" if gesture.scrolling else pinch.closed],
                 )
-                if pinch(ratio):
-                    # closing the pinch moves the fingertip, so use where it was pointing just before
-                    _, px, py = min(history, key=lambda h: abs(h[0] - (now - args.pinch_lookback)))
-                    page.evaluate("([fx, fy]) => window.__vp.selectAt(fx * innerWidth, fy * innerHeight)", [px, py])
+                confirmed = pinch(ratio)
+                # closing the pinch moves the fingertip, so select where it was pointing just before
+                _, px, py = min(history, key=lambda h: abs(h[0] - (now - args.pinch_lookback)))
+                for action, value in gesture.step(confirmed, pinch.closed, smoothed, (px, py)):
+                    if action == "select":
+                        page.evaluate("([fx, fy]) => window.__vp.selectAt(fx * innerWidth, fy * innerHeight)", list(value))
+                    elif action == "scroll_start":
+                        page.mouse.move(float(value[0]), float(value[1]))  # wheel events go to what is under the mouse
+                    elif action == "scroll":
+                        page.mouse.wheel(0, float(value))
             browser.close()
     except Exception as e:  # camera/browser failures should end cleanly, not hang
         print(f"Error: {e}", file=sys.stderr)
