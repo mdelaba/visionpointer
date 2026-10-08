@@ -45,3 +45,4 @@ venv.bak/
 models/
 calibration.json
 .browsers/
+*.csv

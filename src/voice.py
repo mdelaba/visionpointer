@@ -122,7 +122,7 @@ class VoiceAssistant:
         self.status = "listening"
         ring = collections.deque(maxlen=10)  # last 300 ms: (frame, is_speech)
         voiced, silent, speaking, speech_frames = [], 0, False, 0
-        start = time.monotonic()
+        start = last_speech = time.monotonic()
         while not self._stop.is_set():
             if not speaking and not self._hand_present():
                 return None
@@ -139,6 +139,8 @@ class VoiceAssistant:
             else:
                 voiced.append(frame)
                 speech_frames += is_speech
+                if is_speech:
+                    last_speech = time.monotonic()
                 silent = 0 if is_speech else silent + 1
                 if silent * FRAME_MS / 1000 >= self.silence_s or time.monotonic() - start > 30:
                     if speech_frames < MIN_SPEECH_FRAMES:  # a burst of noise, not words
@@ -146,6 +148,7 @@ class VoiceAssistant:
                         ring.clear()
                         self.status = "listening"
                         continue
+                    self._timing = {"speech_s": last_speech - start, "end_wait_s": time.monotonic() - last_speech, "ended": time.monotonic()}
                     return np.frombuffer(b"".join(voiced), np.int16)
         return None
 
@@ -159,6 +162,9 @@ class VoiceAssistant:
             vad_filter=True, vad_parameters={"min_silence_duration_ms": 500},  # Silero: drops non-speech before Whisper sees it
         )
         segments = list(segments)
+        t = getattr(self, "_timing", None)
+        if t:
+            print(f"VOICE timing: spoke {t['speech_s']:.1f}s, waited {t['end_wait_s']:.2f}s after your last word to decide you were done, transcribed in {time.monotonic() - t['ended']:.2f}s", flush=True)
         if not segments:
             return
         text = " ".join(s.text.strip() for s in segments).strip()
@@ -168,65 +174,130 @@ class VoiceAssistant:
                 or re.sub(r"[^a-z ]", "", text.lower()).strip() in NOISE):
             return
         print(f"VOICE heard: {text}", flush=True)
-        self.caption = f"You: {text}"
+        self.caption = self._question = f"You: {text}"
         if re.sub(r"[^a-z ]", "", text.lower()).strip() in RESET_PHRASES:
             SESSION_FILE.unlink(missing_ok=True)
-            self._speak("Okay, starting fresh.")
+            say, finish = self._start_speaker()
+            say("Okay, starting fresh.")
+            finish()
             return
         self.status = "thinking"
-        reply = self._ask(text)
-        print(f"VOICE reply: {reply}", flush=True)
+        say, finish = self._start_speaker()
+        try:
+            reply = self._ask(text, say)
+        finally:
+            finish()  # waits until everything queued has been spoken
+        print(f"\nVOICE reply: {reply}", flush=True)
         self.caption = f"You: {text}\nClaude: {reply}"
-        self._speak(reply)
 
-    def _ask(self, text):
+    def _ask(self, text, say):
+        """Run claude -p, streaming: each finished sentence goes to say() while the rest is still being written."""
         STATE_DIR.mkdir(parents=True, exist_ok=True)
         MCP_CONFIG.write_text(json.dumps({"mcpServers": {"visionpointer": {
             "command": sys.executable, "args": [str(ROOT / "src" / "mcp_server.py")]}}}))
-        cmd = ["claude", "-p", "--output-format", "json", "--strict-mcp-config", "--mcp-config", str(MCP_CONFIG),
-               "--disable-slash-commands", "--allowedTools", TOOLS, "--append-system-prompt", SYSTEM_PROMPT]
+        cmd = ["claude", "-p", "--output-format", "stream-json", "--include-partial-messages", "--verbose",
+               "--strict-mcp-config", "--mcp-config", str(MCP_CONFIG), "--disable-slash-commands",
+               "--allowedTools", TOOLS, "--append-system-prompt", SYSTEM_PROMPT]
         if self.model:
             cmd += ["--model", self.model]
-        if SESSION_FILE.exists():
+        resumed = SESSION_FILE.exists()
+        if resumed:
             cmd += ["--resume", SESSION_FILE.read_text().strip()]
+        proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, cwd=STATE_DIR)
+        timer = threading.Timer(self.claude_timeout, proc.kill)
+        timer.start()
+        result = None
+        spoken = False
+        buf = ""
+        streamed = ""
+
+        def flush(final):
+            nonlocal buf, spoken
+            while True:
+                m = re.search(r"[.!?](\s|$)", buf)
+                if not m or (m.end() == len(buf) and not final and m.group(1) == ""):
+                    break
+                sentence, buf = buf[:m.end()].strip(), buf[m.end():]
+                if sentence:
+                    say(sentence)
+                    spoken = True
+            if final and buf.strip():
+                say(buf.strip())
+                spoken = True
+                buf = ""
+
         try:
-            out = subprocess.run(cmd, input=text, capture_output=True, text=True, timeout=self.claude_timeout, cwd=STATE_DIR)
-        except subprocess.TimeoutExpired:
-            return "Sorry, that took too long."
-        try:
-            data = json.loads(out.stdout)
-        except ValueError:
-            print(f"claude failed: {out.stderr[:300]}", flush=True)
-            if "--resume" in cmd:
-                SESSION_FILE.unlink(missing_ok=True)  # a stale session id: next question starts fresh
-            return "Sorry, I could not reach Claude."
-        if data.get("session_id") and not data.get("is_error"):
-            SESSION_FILE.write_text(data["session_id"])
-        return str(data.get("result") or "Sorry, I have no answer.")
+            proc.stdin.write(text)
+            proc.stdin.close()
+            for line in proc.stdout:
+                try:
+                    ev = json.loads(line)
+                except ValueError:
+                    continue
+                if ev.get("type") == "stream_event":
+                    e = ev.get("event", {})
+                    if e.get("type") == "content_block_delta" and e["delta"].get("type") == "text_delta":
+                        buf += e["delta"]["text"]
+                        streamed += e["delta"]["text"]
+                        self.caption = f"{self._question}\nClaude: " + (("..." + streamed[-400:]) if len(streamed) > 400 else streamed)  # shown live in the banner
+                        print(e["delta"]["text"], end="", flush=True)
+                        flush(False)
+                    elif e.get("type") == "content_block_stop":
+                        flush(True)  # end of a text block (or tool call): speak what is left
+                elif ev.get("type") == "result":
+                    result = ev
+            proc.wait(timeout=5)
+        except Exception as e:
+            print(f"claude stream error: {e}", flush=True)
+        finally:
+            timer.cancel()
+            proc.kill()
+        flush(True)
+        if result is None or result.get("is_error"):
+            print(f"claude failed: {proc.stderr.read()[:300]}", flush=True)
+            if resumed:
+                SESSION_FILE.unlink(missing_ok=True)  # a stale session id: the next question starts fresh
+            reply = "Sorry, I could not reach Claude." if result is None else "Sorry, something went wrong."
+            say(reply)
+            return reply
+        if result.get("session_id"):
+            SESSION_FILE.write_text(result["session_id"])
+        reply = str(result.get("result") or "")
+        if not spoken:
+            reply = reply or "Sorry, I have no answer."
+            say(reply)
+        return reply
 
     # ---- speech out -------------------------------------------------------------------------
-    def _speak(self, text):
-        """Speak sentence by sentence: the next sentence is synthesised while the current one plays."""
-        self.status = "speaking"
-        text = re.sub(r"[*_`#>]|\[([^\]]*)\]\([^)]*\)", lambda m: m.group(1) or "", text)
-        sentences = [s for s in re.split(r"(?<=[.!?])\s+", text.strip()) if s.strip()]
-        paths = queue.Queue(maxsize=2)
+    def _start_speaker(self):
+        """Returns (say, finish): say(sentence) queues speech as it arrives, finish() waits until it has all played."""
+        q = queue.Queue()
 
-        def synth():
-            try:
-                for s in sentences:
-                    f = tempfile.NamedTemporaryFile(suffix=".wav", delete=False)
-                    with wave.open(f, "wb") as w:
-                        self._piper.synthesize_wav(s, w)
-                    paths.put(f.name)
-            finally:
-                paths.put(None)
+        def worker():
+            while (sentence := q.get()) is not None:
+                if self._stop.is_set():
+                    continue
+                self.status = "speaking"
+                clean = re.sub(r"\[([^\]]*)\]\([^)]*\)", r"\1", sentence)
+                clean = re.sub(r"[*_`#>]", "", clean).strip()
+                if not clean:
+                    continue
+                try:
+                    with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f:
+                        with wave.open(f, "wb") as w:
+                            self._piper.synthesize_wav(clean, w)
+                    subprocess.run(["pw-play", f.name], timeout=60, stderr=subprocess.DEVNULL)
+                except Exception as e:
+                    print(f"speech error: {e}", flush=True)
+                finally:
+                    Path(f.name).unlink(missing_ok=True)
 
-        threading.Thread(target=synth, daemon=True).start()
-        while (p := paths.get()) is not None:
-            try:
-                if not self._stop.is_set():
-                    subprocess.run(["pw-play", p], timeout=60, stderr=subprocess.DEVNULL)
-            finally:
-                Path(p).unlink(missing_ok=True)
-        time.sleep(0.3)  # let the room tail off before the mic reopens
+        t = threading.Thread(target=worker, daemon=True)
+        t.start()
+
+        def finish():
+            q.put(None)
+            t.join(timeout=120)
+            time.sleep(0.3)  # let the room tail off before the mic reopens
+
+        return q.put, finish
