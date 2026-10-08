@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>VisionPointer test page</title>
+<style>
+  body { font-family: sans-serif; margin: 0; padding: 70px 40px 40px; background: #fafafa; }
+  #banner { position: fixed; top: 0; left: 0; right: 0; padding: 12px 40px; background: #222; color: #fff; font-size: 20px; z-index: 10; }
+  section { margin: 0 0 50px; }
+  h2 { margin: 0 0 12px; }
+  button, input, select, a.btn { font-size: 16px; padding: 8px 14px; margin-right: 12px; }
+  .tiny { font-size: 11px; padding: 2px 5px; }
+  .cluster a { display: inline-block; margin: 0 10px 10px 0; padding: 3px 8px; background: #dde; border-radius: 3px; text-decoration: none; color: #223; font-size: 13px; }
+  table { border-collapse: collapse; } td, th { border: 1px solid #ccc; padding: 10px 24px; }
+  tr[onclick] { cursor: pointer; } .spacer { height: 900px; background: linear-gradient(#fafafa, #dde); }
+  #log { font-family: monospace; white-space: pre-wrap; background: #fff; border: 1px solid #ccc; padding: 10px; }
+</style>
+</head>
+<body>
+<div id="banner">VisionPointer test page - dwell on an element to select it</div>
+
+<section>
+  <h2>Buttons</h2>
+  <button id="btn-large" style="font-size:28px;padding:20px 40px">Large</button>
+  <button id="btn-medium">Medium</button>
+  <button id="btn-small" class="tiny">Small</button>
+  <button id="btn-disabled" disabled>Disabled (ignored)</button>
+</section>
+
+<section>
+  <h2>Form controls</h2>
+  <input id="in-text" type="text" placeholder="Text input">
+  <select id="in-select"><option>One</option><option>Two</option></select>
+  <label><input id="in-check" type="checkbox"> Checkbox</label>
+</section>
+
+<section class="cluster">
+  <h2>Dense cluster (small targets)</h2>
+  <a id="c1" href="#c1">Alpha</a><a id="c2" href="#c2">Beta</a><a id="c3" href="#c3">Gamma</a><a id="c4" href="#c4">Delta</a>
+  <a id="c5" href="#c5">Epsilon</a><a id="c6" href="#c6">Zeta</a><a id="c7" href="#c7">Eta</a><a id="c8" href="#c8">Theta</a>
+</section>
+
+<section>
+  <h2>Table rows</h2>
+  <table>
+    <tr><th>Item</th><th>Qty</th></tr>
+    <tr id="row-1" onclick="void 0"><td>Apples</td><td>3</td></tr>
+    <tr id="row-2" onclick="void 0"><td>Pears</td><td>5</td></tr>
+    <tr id="row-3" onclick="void 0"><td>Plums</td><td>8</td></tr>
+  </table>
+</section>
+
+<section>
+  <h2>Links</h2>
+  <a id="link-a" href="#link-a">Link A</a> &nbsp; <a id="link-b" href="#link-b">Link B</a> &nbsp; <a id="link-c" href="#link-c">Link C</a>
+</section>
+
+<section><h2>Selection log</h2><div id="log">(nothing selected yet)</div></section>
+<div class="spacer"></div>
+<section><h2>Below the fold</h2><button id="btn-bottom">Bottom button</button></section>
+
+<script>
+  const params = new URLSearchParams(location.search);
+  const log = document.getElementById('log'), banner = document.getElementById('banner');
+  document.addEventListener('vpselect', (e) => {
+    if (!hit.active) log.textContent = 'Selected: ' + JSON.stringify(e.detail, null, 1);
+    else hit.onSelect(e.detail);
+  });
+
+  // Hit-test mode (?hit=1): asks for one target at a time and scores the selected element.
+  const hit = { active: params.has('hit'), i: 0, results: [], targets: [
+    ['btn-large', 'the "Large" button'], ['btn-medium', 'the "Medium" button'], ['btn-small', 'the tiny "Small" button'],
+    ['in-text', 'the text box ("Text input")'], ['in-select', 'the dropdown (One / Two)'],
+    ['c1', 'the "Alpha" link'], ['c4', 'the "Delta" link'], ['c6', 'the "Zeta" link'], ['c8', 'the "Theta" link'],
+    ['row-2', 'the "Pears" table row'], ['link-b', 'the "Link B" link'],
+  ] };
+  hit.show = () => { banner.textContent = `Hit test ${hit.i + 1}/${hit.targets.length}: point at ${hit.targets[hit.i][1]} and hold`; };
+  hit.onSelect = (d) => {
+    const want = hit.targets[hit.i][0], got = d.id;
+    // a checkbox inside a label or a row cell selects the element itself, so compare by id
+    hit.results.push({ want, got, ok: want === got });
+    console.log('VP_HIT ' + JSON.stringify(hit.results.at(-1)));
+    if (++hit.i < hit.targets.length) return hit.show();
+    const ok = hit.results.filter((r) => r.ok).length;
+    banner.textContent = `Hit test done: ${ok}/${hit.results.length} correct`;
+    console.log(`VP_HIT_SUMMARY ${ok}/${hit.results.length}`);
+    hit.active = false;
+  };
+  if (hit.active) hit.show();
+</script>
+</body>
+</html>
