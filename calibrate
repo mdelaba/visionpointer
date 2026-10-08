@@ -1,0 +1,3 @@
+#!/usr/bin/env bash
+D="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+exec "$D/.venv/bin/python" "$D/src/calibrate_pointer.py" "$@"

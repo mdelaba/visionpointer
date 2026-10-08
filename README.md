@@ -26,25 +26,27 @@ curl -L -o models/hand_landmarker.task \
 
 ### 2. Check hand tracking and pinch detection
 ```bash
-.venv/bin/python src/finger_circle.py
+./test
 ```
 A blue circle follows your index fingertip in the webcam preview and turns green while you pinch. The top line shows the thumb-to-index ratio. Tune with `--pinch-close` (default 0.20) and `--pinch-open` (default 0.25). Press `q` or Esc to quit.
 
 ### 3. Calibrate
 ```bash
-.venv/bin/python src/calibrate_pointer.py --recalibrate
+./calibrate --recalibrate
 ```
 Point at each red crosshair and press SPACE (keep your finger visible and steady while it samples). This saves `calibration.json`, which is only valid for the same screen size and camera resolution, so recalibrate if either changes. Afterwards the script shows the circle on a fullscreen canvas so you can check the accuracy. Press `c` to recalibrate and `q` to quit.
 
 ### 4. Point at web elements
 ```bash
-.venv/bin/python src/web_pointer.py              # free pointing on the test page
-.venv/bin/python src/web_pointer.py --hit-test   # scored test, results printed as VP_HIT lines
-.venv/bin/python src/web_pointer.py --url https://example.com
+./web-pointer              # free pointing on the test page
+./web-pointer --hit-test   # scored test, results printed as VP_HIT lines
+./web-pointer --url https://example.com
 ```
 Hold your hand in a hook posture (index finger curled near the thumb) and move your hand to move the circle. The nearest clickable element within 50 px gets a blue outline. Pinch to select it: it gets a sticky green highlight and is written to `~/.cache/visionpointer/selection.json`. Pinch empty space to clear. Press Esc in the browser to quit. On Hyprland the script asks for fullscreen itself, because pointing only maps correctly when the page fills the screen.
 
 Useful options: `--radius` (snap radius, px), `--dwell-ms` (also select after holding; 0 = off), `--smooth` / `--smooth-beta` (steadiness vs lag), `--confidence`, `--max-jump`, `--timeout` (default 300 s), `--debug-log file.csv` (per-frame positions and pinch ratio for tuning).
+
+(`./test`, `./calibrate` and `./web-pointer` are launchers for the scripts in `src/`; all flags pass through.)
 
 ### 5. Connect an agent (MCP)
 ```bash
@@ -227,3 +229,44 @@ Build and support purpose-made hardware that lets people work with AI without a 
 3. **Protocol:** define the device-to-host event protocol (HID/BLE) and a host driver in this project.
 4. **Iterate:** user-test pointer accuracy and navigation ergonomics, then refine the hardware.
 5. **Support:** document the build, publish firmware and designs, and decide whether to offer manufactured units.
+
+---
+
+## 8. Future Work: Hands-Free Voice Commands
+
+VisionPointer only handles the pointing half of "voice + pointing". This section records the plan for the voice half. It is likely a separate companion project rather than part of this one, and nothing here is built yet.
+
+### What exists today
+* Claude Code's `/voice` is cloud speech-to-text: audio is streamed to Anthropic's servers and needs a claude.ai sign-in. Only the microphone capture is local.
+* It needs a keypress to start, so there is no wake word and it is not hands-free.
+* Dictation can auto-send without pressing Enter: `/voice tap` (tap to start, tap to send), or `"autoSubmit": true` in the `voice` settings object for hold mode. Both only submit transcripts of three words or more.
+
+### Goal
+Fully hands-free: say a wake word, speak a request ("what does this do?"), and have it sent to the agent while the pinch-selected element is the "this". No keyboard.
+
+### Proposed design
+A small local voice daemon that runs alongside `web-pointer`:
+
+```
+mic -> wake word -> record until silence -> speech-to-text -> send to the agent -> (optional) spoken reply
+```
+
+| Stage | Choice | Why |
+| :--- | :--- | :--- |
+| Wake word | openWakeWord (for example "hey claude") | Local, always listening, nothing leaves the machine |
+| End of speech | Silero VAD | Stops recording when the user stops talking |
+| Speech-to-text | faster-whisper (`base` or `small`) | Local, free, fast enough on CPU, works with any agent |
+| Spoken reply (optional) | Piper TTS | The user is not looking at the terminal |
+| Feedback | Short beeps on wake and on send | The user needs to know it heard them while pointing |
+
+### How the text reaches the agent
+1. **tmux (preferred):** the agent runs in a tmux pane and the daemon types the transcript with `tmux send-keys -l "<text>"` then `Enter`. This keeps the interactive session and works with any terminal agent.
+2. **Headless:** run `claude -p "<text>" --continue` per utterance and read the reply back. Simple, but no interactive UI.
+3. **Typing into the focused window** (`wtype`/`ydotool`): rejected, it breaks whenever focus changes.
+
+The sender should be a pluggable command, with tmux as the default.
+
+### Open issues
+* **Permission prompts stall a hands-free session.** Allow-list `mcp__visionpointer__*` in the agent's settings; other tools need voice approval or an allow-list.
+* **Echo:** TTS replies can trigger the wake word, so pause listening while speaking.
+* **Interim option:** `/voice tap` with `autoSubmit` is the cheapest stopgap if a keypress is acceptable. It could be bound to a foot pedal or a button on the pointer hardware from Section 7.
